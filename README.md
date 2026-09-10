@@ -50,6 +50,37 @@ your machine). The status line always tells you what is happening
   there, so keep the folder itself non-shared. For sensitive notes prefer
   internet sharing (end-to-end encrypted).
 
+## Install on another machine (friends & family)
+
+The repo is private, so first give your friend access (GitHub → repo
+Settings → Collaborators → add them). Then on their machine:
+
+```bash
+omarchy plugin add https://github.com/ariDev1/transNote.git --enable
+omarchy restart shell
+```
+
+Open TransNote in the bar — the first launch sets everything up by itself.
+Then exchange codes (panel → SHARE OVER INTERNET) and add each other.
+
+If the panel says it needs Node.js:
+
+```bash
+omarchy pkg add nodejs npm
+omarchy restart shell
+```
+
+## Updates
+
+When a new version is out, on each machine:
+
+```bash
+omarchy plugin update rene.transnote
+omarchy restart shell
+```
+
+Check you're current: the panel footer ends with `· vX.Y.Z`.
+
 ## Files (for the curious)
 
 - `Panel.qml` — widget UI, self-setup, friends, automatic sync
