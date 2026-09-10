@@ -52,6 +52,9 @@ your machine). The status line always tells you what is happening
 
 ## Install on another machine (friends & family)
 
+The `rene.` in the name is just the publisher name (like a brand) — the
+plugin works under any username on any machine. Nothing is hardcoded.
+
 The repo is private, so first give your friend access (GitHub → repo
 Settings → Collaborators → add them). Then on their machine:
 
