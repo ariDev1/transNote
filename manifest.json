@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "rene.transnote",
+  "name": "TransNote",
+  "version": "0.2.0",
+  "author": "rene",
+  "description": "Fast shared text notes: write notes, share with friends, read and comment. Works locally, via shared folders, and over the internet (encrypted). No terminal needed.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "TransNote",
+    "description": "Shared text notes with peer comments",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "deviceId": "",
+      "syncDir": "",
+      "allowList": []
+    },
+    "schema": [
+      {
+        "key": "deviceId",
+        "type": "string",
+        "label": "Device id",
+        "defaultValue": "",
+        "description": "Stable name for this machine (e.g. laptop). Peers approve this id to qualify you."
+      },
+      {
+        "key": "syncDir",
+        "type": "path",
+        "label": "Sync folder",
+        "defaultValue": "",
+        "description": "Folder synced between machines (Syncthing, Dropbox, rsync). Each device writes <deviceId>.json here."
+      },
+      {
+        "key": "allowList",
+        "type": "string",
+        "label": "Qualified peers",
+        "defaultValue": "",
+        "description": "Comma-separated device ids (local folder sync) or 64-char hex pubkeys (internet Nostr sync) allowed to read your shared notes. Convert a friend's npub with: node nostr/sync.mjs npub-to-hex --npub <npub>."
+      }
+    ]
+  }
+}
