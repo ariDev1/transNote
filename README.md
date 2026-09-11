@@ -73,7 +73,8 @@ your machine). The status line always tells you what is happening
 ## Attachments (folder sync)
 
 Attach files to your own notes: paste a path in the attach row, press
-**Attach**. Code fences (```` ``` ````) keep rendering as text blocks;
+**Attach**. Paths complete as you type (Tab for the common prefix, click
+a suggestion, Esc to dismiss) — same in the Setup folder field. Code fences (```` ``` ````) keep rendering as text blocks;
 *attached files* are the real files:
 
 - Bytes travel as sidecars in `<syncDir>/.attachments/` (synced like the

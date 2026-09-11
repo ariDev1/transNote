@@ -515,6 +515,107 @@ Panel {
       setupMessage = "Couldn't save — try again."
     }
   }
+  // Path autocomplete for every path field (Setup folder, attach path).
+  // Debounced `compgen` lookup; Tab completes the common prefix, click (or
+  // Tab on a single match) accepts. target is "setup" or a note id.
+  property var completeResults: []
+  property string completeFor: ""
+  property var completePending: null
+  function expandCompletePartial(text) {
+    var p = Store.normalizeText(text)
+    if (p === "") return ""
+    if (p[0] === "~") p = (home || "") + p.slice(1)
+    if (p[0] !== "/") p = (home || "") + "/" + p
+    return p
+  }
+  function shortCompletePath(path) {
+    var h = home || ""
+    if (h !== "" && String(path).indexOf(h + "/") === 0) return "~" + String(path).slice(h.length)
+    return String(path)
+  }
+  function requestComplete(target, text, dirsOnly) {
+    completePending = { target: target, partial: expandCompletePartial(text), dirsOnly: dirsOnly === true }
+    if (completePending.partial === "") {
+      completeResults = []
+      completeFor = ""
+      return
+    }
+    completeDebounce.restart()
+  }
+  function runComplete() {
+    if (completeProcess.running) return
+    var req = completePending
+    completePending = null
+    if (!req) return
+    completeProcess.currentTarget = req.target
+    completeProcess.currentPartial = req.partial
+    completeProcess.command = ["bash", "-c", req.dirsOnly ? 'compgen -d -- "$0"' : 'compgen -f -- "$0"', req.partial]
+    completeProcess.running = true
+  }
+  function applyComplete(output) {
+    var target = completeProcess.currentTarget
+    // Field cleared while we worked: drop stale results.
+    var cur = target === "setup" ? expandCompletePartial(setupDir) : expandCompletePartial(attachPaths[target] || "")
+    if (cur === "") {
+      completeResults = []
+      completeFor = ""
+      return
+    }
+    var seen = {}
+    var out = []
+    String(output || "").split("\n").forEach(function (line) {
+      var s = line.trim()
+      if (s !== "" && !seen[s] && out.length < 12) { seen[s] = true; out.push(s) }
+    })
+    // User kept typing while we worked: re-run with the latest text.
+    if (completePending) {
+      completeResults = []
+      completeFor = ""
+      runComplete()
+      return
+    }
+    // A single exact match is completion, not a suggestion.
+    if (out.length === 1 && out[0] === expandCompletePartial(completeProcess.currentPartial || "")) {
+      completeResults = []
+      completeFor = ""
+      return
+    }
+    completeResults = out
+    completeFor = out.length > 0 ? target : ""
+  }
+  function acceptCompletion(target, value) {
+    completeResults = []
+    completeFor = ""
+    completePending = null
+    if (target === "setup") {
+      setupDir = value
+      if (setupDirField) setupDirField.text = value
+    } else {
+      var m = {}
+      for (var k in attachPaths) m[k] = attachPaths[k]
+      m[target] = value
+      attachPaths = m
+    }
+  }
+  function completeCommonPrefix(target) {
+    var list = (completeFor === target) ? completeResults : []
+    if (list.length === 0) return false
+    var prefix = String(list[0])
+    for (var i = 1; i < list.length; i++) {
+      var s = String(list[i])
+      var j = 0
+      while (j < prefix.length && j < s.length && prefix[j] === s[j]) j++
+      prefix = prefix.slice(0, j)
+    }
+    if (prefix === "") return false
+    acceptCompletion(target, prefix)
+    return true
+  }
+  function clearCompletion() {
+    completeResults = []
+    completeFor = ""
+    completePending = null
+  }
   readonly property var nostrAllowList: {
     var base = (allowList || []).slice()
     ;(friends || []).forEach(function (f) { if (f && f.hex) base.push(f.hex) })
@@ -1274,6 +1375,27 @@ Panel {
     }
   }
 
+  // Path completion engine (see requestComplete): debounced compgen lookup
+  // shared by every path field. currentTarget/Partial carry the request the
+  // running process answers (declared props — QML forbids expando).
+  Timer {
+    id: completeDebounce
+    interval: 200
+    repeat: false
+    onTriggered: root.runComplete()
+  }
+
+  Process {
+    id: completeProcess
+    property string currentTarget: ""
+    property string currentPartial: ""
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyComplete(text)
+    }
+  }
+
   // Save one attachment to ~/Downloads (stdout parsed by onSaveOutput).
   Process {
     id: saveProcess
@@ -1985,14 +2107,16 @@ Panel {
             }
           }
           // Attach row on own notes: paste a path, staged + hashed locally.
+          // Path completion included (Tab completes, click accepts).
           RowLayout {
             visible: note.author === root.myId
             width: parent.width
             spacing: Style.space(6)
             TextField {
+              id: attachPathField
               Layout.fillWidth: true
               Layout.minimumWidth: 0
-              placeholderText: "Attach file path…"
+              placeholderText: "Attach file path… (Tab completes)"
               foreground: root.foreground
               text: root.attachPaths[note.id] || ""
               onTextChanged: {
@@ -2000,14 +2124,39 @@ Panel {
                 for (var k in root.attachPaths) m[k] = root.attachPaths[k]
                 m[note.id] = text
                 root.attachPaths = m
+                root.requestComplete(note.id, text, false)
               }
-              onAccepted: root.attachFile(note.id, text)
+              onAccepted: { root.clearCompletion(); root.attachFile(note.id, text) }
+              Keys.onTabPressed: function (event) {
+                if (root.completeCommonPrefix(note.id)) event.accepted = true
+              }
+              Keys.onEscapePressed: root.clearCompletion()
             }
             Button {
               text: root.attachBusy[note.id] ? "…" : "Attach"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: root.attachFile(note.id, root.attachPaths[note.id] || "")
+              onClicked: { root.clearCompletion(); root.attachFile(note.id, root.attachPaths[note.id] || "") }
+            }
+          }
+          // Path suggestions for this note's attach field.
+          Column {
+            width: parent.width
+            visible: note.author === root.myId && root.completeFor === note.id && root.completeResults.length > 0 && attachPathField.activeFocus
+            spacing: Style.space(2)
+            Repeater {
+              model: root.completeResults
+              delegate: Button {
+                required property var modelData
+                width: parent.width
+                text: "▸ " + root.shortCompletePath(modelData)
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: {
+                  root.acceptCompletion(note.id, modelData)
+                  attachPathField.forceActiveFocus()
+                }
+              }
             }
           }
           Text {
@@ -2280,11 +2429,35 @@ Panel {
       TextField {
         id: setupDirField
         width: parent.width
-        placeholderText: "~/transnote-lan…"
+        placeholderText: "~/transnote-lan… (Tab completes)"
         foreground: root.foreground
         text: root.setupDir
-        onTextChanged: { root.setupDir = text; root.checkSetupFolder() }
-        onAccepted: root.saveSetupDir()
+        onTextChanged: { root.setupDir = text; root.checkSetupFolder(); root.requestComplete("setup", text, true) }
+        onAccepted: { root.clearCompletion(); root.saveSetupDir() }
+        Keys.onTabPressed: function (event) {
+          if (root.completeCommonPrefix("setup")) event.accepted = true
+        }
+        Keys.onEscapePressed: root.clearCompletion()
+      }
+      // Path suggestions (folders only), click to accept.
+      Column {
+        width: parent.width
+        visible: root.completeFor === "setup" && root.completeResults.length > 0 && setupDirField.activeFocus
+        spacing: Style.space(2)
+        Repeater {
+          model: root.completeResults
+          delegate: Button {
+            required property var modelData
+            width: parent.width
+            text: "▸ " + root.shortCompletePath(modelData)
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: {
+              root.acceptCompletion("setup", modelData)
+              setupDirField.forceActiveFocus()
+            }
+          }
+        }
       }
       RowLayout {
         width: parent.width
