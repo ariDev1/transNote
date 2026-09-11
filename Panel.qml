@@ -671,6 +671,118 @@ Panel {
   function markAllRead() {
     if (Object.keys(unreadIds).length > 0) unreadIds = ({})
   }
+  // Note tints: translucent theme-safe washes (never opaque theme colors),
+  // one per note, synced like any other field. Cycled from the title row.
+  readonly property var noteTintMap: ({
+    red: "#2BE57373", orange: "#2BFFB74D", yellow: "#2BFFF176",
+    green: "#2B81C784", blue: "#2B64B5F6", violet: "#2BBA68C8"
+  })
+  readonly property var colorCycle: ["red", "orange", "yellow", "green", "blue", "violet", ""]
+  function noteTint(note) {
+    var c = (note && note.color) || ""
+    return noteTintMap[c] || "transparent"
+  }
+  function cycleColor(noteId) {
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === noteId) {
+        var cur = Store.sanitizeColor(localNotes[i].color)
+        var at = colorCycle.indexOf(cur)
+        Store.setColor(localNotes[i], colorCycle[(at + 1) % colorCycle.length], myId)
+        touchLocalNotes()
+        break
+      }
+    }
+    persist()
+  }
+  // Keyboard navigation (Omarchy idiom: PanelKeyCatcher + note cursor).
+  // j/k/arrows move, Enter/Space expands, c copies, s shares, x deletes
+  // own notes, a opens the attach row, / jumps to compose. Any text field
+  // focused sets editing (catcher passes keys through instead).
+  property bool editing: false
+  property bool cursorActive: false
+  property int noteCursor: -1
+  property string focusAttachFor: ""
+  function cursorNoteId() {
+    if (noteCursor < 0 || noteCursor >= displayNotes.length) return ""
+    var n = displayNotes[noteCursor]
+    return (n && n.id) || ""
+  }
+  function cursorOn(noteId) {
+    return cursorActive && cursorNoteId() === noteId
+  }
+  function ensureCursor() {
+    if (displayNotes.length === 0) { noteCursor = -1; return }
+    if (noteCursor < 0) noteCursor = 0
+    if (noteCursor >= displayNotes.length) noteCursor = displayNotes.length - 1
+  }
+  function cursorNote() {
+    var id = cursorNoteId()
+    if (id === "") return null
+    for (var i = 0; i < displayNotes.length; i++) {
+      if (displayNotes[i] && displayNotes[i].id === id) return displayNotes[i]
+    }
+    return null
+  }
+  function moveCursor(dx, dy) {
+    if (root.panelView !== "notes") return
+    cursorActive = true
+    if (dy !== 0) {
+      ensureCursor()
+      noteCursor = Math.max(0, Math.min(displayNotes.length - 1, noteCursor + dy))
+      scrollCursorIntoView()
+    } else if (dx < 0) {
+      var n = cursorNote()
+      if (n && isExpanded(n.id)) toggleExpanded(n.id)
+    } else if (dx > 0) {
+      var m = cursorNote()
+      if (m && !isExpanded(m.id)) toggleExpanded(m.id)
+    }
+  }
+  function activateCursor() {
+    if (root.panelView !== "notes") return
+    cursorActive = true
+    ensureCursor()
+    var n = cursorNote()
+    if (n) toggleExpanded(n.id)
+  }
+  function deleteCursorNote() {
+    var n = cursorNote()
+    if (n && isLocalNote(n.id)) deleteNote(n.id)
+  }
+  function cursorKey(t) {
+    if (root.panelView !== "notes") return
+    if (t === "c") {
+      var n = cursorNote()
+      if (n) copyNoteFull(n)
+    } else if (t === "s") {
+      var m = cursorNote()
+      if (m && m.author === myId) toggleShare(m.id)
+    } else if (t === "a") {
+      var k = cursorNote()
+      if (k && isLocalNote(k.id)) {
+        if (!attachOpen[k.id]) toggleAttachRow(k.id)
+        focusAttachFor = k.id
+      }
+    } else if (t === "t") {
+      var c2 = cursorNote()
+      if (c2 && c2.author === myId) cycleColor(c2.id)
+    } else if (t === "/") {
+      if (noteTitleField) noteTitleField.forceActiveFocus()
+    }
+  }
+  function scrollCursorIntoView() {
+    if (noteCursor < 0 || !panelFlick) return
+    try {
+      notesView.positionViewAtIndex(noteCursor, ListView.Contain)
+      var item = notesView.itemAtIndex(noteCursor)
+      if (!item) return
+      var p = item.mapToItem(panelFlick.contentItem, 0, 0)
+      if (p.y < panelFlick.contentY) panelFlick.contentY = p.y
+      else if (p.y + item.height > panelFlick.contentY + panelFlick.height) {
+        panelFlick.contentY = p.y + item.height - panelFlick.height
+      }
+    } catch (e) { /* best effort */ }
+  }
   // Notes expanded to full body text (map noteId -> true). Collapsed notes
   // show a short preview so one long note never takes over the list.
   property var expandedNotes: ({})
@@ -1131,7 +1243,10 @@ Panel {
   function toggleAttachRow(noteId) {
     var m = {}
     for (var k in attachOpen) m[k] = attachOpen[k]
-    if (m[noteId]) delete m[noteId]
+    if (m[noteId]) {
+      delete m[noteId]
+      if (focusAttachFor === noteId) focusAttachFor = ""
+    }
     else m[noteId] = true
     attachOpen = m
   }
@@ -1673,6 +1788,9 @@ Panel {
   }
 
   onAllowListChanged: { root.refilterNostr(); root.updateNetStatus() }
+  onDisplayNotesChanged: {
+    if (noteCursor >= displayNotes.length) noteCursor = displayNotes.length - 1
+  }
   onOpenedChanged: { if (opened) root.markAllRead() }
   onMyHexChanged: { root.refilterNostr(); root.updateNetStatus() }
   onFriendsChanged: { root.refilterNostr(); root.updateNetStatus() }
@@ -1750,6 +1868,19 @@ Panel {
     // cap / screen edge, and anything taller scrolls here — footer included.
     // The notes list below therefore never needs its own cap: it grows
     // naturally and this Flickable is the single scroll region.
+    // Keyboard dispatcher (Omarchy idiom): arrows/hjkl move the note
+    // cursor, Enter expands, x deletes own notes, c/s/a// act, Esc closes,
+    // Tab switches panels. Blocked while typing in any field.
+    PanelKeyCatcher {
+      anchors.fill: parent
+      blocked: root.editing
+      onMoveRequested: function (dx, dy) { root.moveCursor(dx, dy) }
+      onActivateRequested: root.activateCursor()
+      onCloseRequested: root.close()
+      onDeleteRequested: root.deleteCursorNote()
+      onTabRequested: function (direction) { root.switchPanel(direction) }
+      onTextKey: function (t) { root.cursorKey(t) }
+
     Flickable {
       id: panelFlick
       anchors.fill: parent
@@ -1831,6 +1962,7 @@ Panel {
         foreground: root.foreground
         onTextChanged: root.newTitle = text
         onAccepted: root.addNote()
+        onActiveFocusChanged: root.editing = activeFocus
       }
       ScrollView {
         id: composeScroll
@@ -1852,6 +1984,7 @@ Panel {
         color: root.foreground
         background: Rectangle { color: "transparent"; border.color: Qt.darker(root.foreground, 1.8); radius: 6 }
         onTextChanged: root.newBody = text
+        onActiveFocusChanged: root.editing = activeFocus
         Keys.onPressed: function (event) {
           if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
             root.addNote()
@@ -1902,28 +2035,55 @@ Panel {
           // (buttons, comment fields) still receive clicks normally.
           interactive: false
 
-            delegate: Column {
+            delegate: Item {
             required property var modelData
             property var note: modelData
             // Collapsed preview computed in JS (plain short text), so a long
             // note can never overflow its delegate and paint over the footer.
             property var bodyPreview: Store.previewBody(note.body)
             width: ListView.view.width
-            spacing: Style.space(4)
+            height: noteCard.implicitHeight + (((note.color || "") !== "") ? Style.space(12) : 0)
+            // Tinted card behind colored notes only; plain notes stay flat
+            // on the panel background (the Omarchy-quiet default).
+            Rectangle {
+              anchors.fill: parent
+              radius: 8
+              visible: ((note.color || "") !== "")
+              color: root.noteTint(note)
+            }
+            Column {
+              id: noteCard
+              anchors.fill: parent
+              anchors.margins: (((note.color || "") !== "") ? Style.space(6) : 0)
+              spacing: Style.space(4)
 
           RowLayout {
             width: parent.width
             spacing: Style.space(8)
             Text {
+              id: noteTitleText
               Layout.fillWidth: true
               Layout.minimumWidth: 0
               text: (note.shared === true ? "◉ " : "○ ") + note.title
-              color: root.foreground
+              // Keyboard cursor: title takes the accent color instead of a
+              // bar widget (keeps the row free of layout intruders).
+              color: root.cursorOn(note.id) ? Color.accent : root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.title
               font.bold: true
+              font.underline: titleHover.containsMouse
               maximumLineCount: 1
               elide: Text.ElideRight
+              // The headline itself toggles expand/collapse (drag-scroll
+              // still works: the outer Flickable may steal the gesture).
+              MouseArea {
+                id: titleHover
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                acceptedButtons: Qt.LeftButton
+                onClicked: root.toggleExpanded(note.id)
+              }
             }
             Text {
               Layout.maximumWidth: Style.space(130)
@@ -1944,9 +2104,12 @@ Panel {
             }
             // Quiet actions: icon-only, tooltips on hover. Share stays
             // author-gated (only the author publishes); Delete covers all
-            // local notes so renames never trap them again.
+            // local notes so renames never trap them again. Explicit touch
+            // targets: icon-only buttons must not rely on implicit sizing.
             Button {
               visible: note.author === root.myId
+              Layout.preferredWidth: Style.space(28)
+              Layout.preferredHeight: Style.space(28)
               iconText: String.fromCodePoint(0xF0474)
               tooltipText: note.shared === true ? "Unshare" : "Share"
               foreground: root.foreground
@@ -1955,6 +2118,8 @@ Panel {
               onClicked: root.toggleShare(note.id)
             }
             Button {
+              Layout.preferredWidth: Style.space(28)
+              Layout.preferredHeight: Style.space(28)
               iconText: root.copiedNoteId === note.id ? String.fromCodePoint(0xF012C) : String.fromCodePoint(0xF018F)
               tooltipText: root.copyFailedId === note.id ? "Copy failed" : (root.copiedNoteId === note.id ? "Copied!" : "Copy note")
               foreground: root.foreground
@@ -1963,11 +2128,23 @@ Panel {
             }
             Button {
               visible: root.isLocalNote(note.id)
+              Layout.preferredWidth: Style.space(28)
+              Layout.preferredHeight: Style.space(28)
               iconText: String.fromCodePoint(0xF0194)
               tooltipText: "Delete"
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.deleteNote(note.id)
+            }
+            Button {
+              visible: note.author === root.myId
+              Layout.preferredWidth: Style.space(28)
+              Layout.preferredHeight: Style.space(28)
+              iconText: String.fromCodePoint(0xF03B2)
+              tooltipText: (note.color || "") !== "" ? "Note color (" + note.color + ")" : "Note color"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.cycleColor(note.id)
             }
           }
           // Body renders as segments: prose as usual, ```fenced code blocks
@@ -2176,10 +2353,17 @@ Panel {
                 root.requestComplete(note.id, text, false)
               }
               onAccepted: { root.clearCompletion(); root.attachFile(note.id, text) }
+              onActiveFocusChanged: root.editing = activeFocus
               Keys.onTabPressed: function (event) {
                 if (root.completeCommonPrefix(note.id)) event.accepted = true
               }
               Keys.onEscapePressed: root.clearCompletion()
+              Connections {
+                target: root
+                function onFocusAttachForChanged() {
+                  if (root.focusAttachFor === note.id && root.attachOpen[note.id]) attachPathField.forceActiveFocus()
+                }
+              }
             }
             Button {
               text: root.attachBusy[note.id] ? "…" : "Attach"
@@ -2223,6 +2407,7 @@ Panel {
             // Comment box on every note: own notes store inline, peer notes
             // go through the sync outbox.
             TextField {
+              id: commentField
               Layout.fillWidth: true
               placeholderText: "Comment…"
               foreground: root.foreground
@@ -2234,6 +2419,7 @@ Panel {
                 root.commentDrafts = drafts
               }
               onAccepted: root.addComment(note.id)
+              onActiveFocusChanged: root.editing = activeFocus
             }
             // Attach toggle (own notes keep it quiet until needed).
             Button {
@@ -2247,7 +2433,8 @@ Panel {
             }
           }
             PanelSeparator { foreground: root.foreground; width: parent.width }
-          } // delegate Column
+            } // noteCard Column
+          } // delegate Item
         } // notesView ListView
       } // notes list container
       } // notesSection column
@@ -2333,6 +2520,7 @@ Panel {
         foreground: root.foreground
         onTextChanged: root.friendInput = text
         onAccepted: root.addFriendFromInput()
+        onActiveFocusChanged: root.editing = activeFocus
       }
       TextField {
         id: friendNameField
@@ -2342,6 +2530,7 @@ Panel {
         foreground: root.foreground
         onTextChanged: root.friendName = text
         onAccepted: root.addFriendFromInput()
+        onActiveFocusChanged: root.editing = activeFocus
       }
       Button {
         visible: root.setupStage === "ready"
@@ -2436,6 +2625,7 @@ Panel {
           text: root.setupDevice
           onTextChanged: root.setupDevice = text
           onAccepted: root.saveSetupDevice()
+          onActiveFocusChanged: root.editing = activeFocus
         }
         Button {
           text: "Save"
@@ -2470,6 +2660,7 @@ Panel {
         text: root.setupDir
         onTextChanged: { root.setupDir = text; root.checkSetupFolder(); root.requestComplete("setup", text, true) }
         onAccepted: { root.clearCompletion(); root.saveSetupDir() }
+        onActiveFocusChanged: root.editing = activeFocus
         Keys.onTabPressed: function (event) {
           if (root.completeCommonPrefix("setup")) event.accepted = true
         }
@@ -2535,6 +2726,7 @@ Panel {
           text: root.setupPeers
           onTextChanged: root.setupPeers = text
           onAccepted: root.saveSetupPeers()
+          onActiveFocusChanged: root.editing = activeFocus
         }
         Button {
           text: "Save"
@@ -2610,5 +2802,6 @@ Panel {
       }
     } // column
     } // panelFlick
+    } // keyCatcher
   }
 }

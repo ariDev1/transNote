@@ -66,7 +66,8 @@ function createNote(title, body, author) {
     updatedAt: now,
     shared: false,
     comments: [],
-    attachments: []
+    attachments: [],
+    color: ""
   }
 }
 
@@ -81,7 +82,8 @@ function sanitizeNote(raw) {
     updatedAt: normalizeText(raw.updatedAt) || normalizeText(raw.createdAt) || nowIso(),
     shared: raw.shared === true,
     comments: [],
-    attachments: []
+    attachments: [],
+    color: sanitizeColor(raw.color)
   }
   if (note.id === "") return null
   var comments = Array.isArray(raw.comments) ? raw.comments : []
@@ -139,6 +141,16 @@ function setShared(note, shared, requester) {
   if (!note) return false
   if (normalizeText(requester) !== "" && normalizeText(requester) !== note.author) return false
   note.shared = shared === true
+  note.updatedAt = nowIso()
+  return true
+}
+
+// Same ownership for the tint: only the author recolors (it syncs to
+// everyone). Unknown keys are rejected, "" clears back to plain.
+function setColor(note, color, requester) {
+  if (!note) return false
+  if (normalizeText(requester) !== "" && normalizeText(requester) !== note.author) return false
+  note.color = sanitizeColor(color)
   note.updatedAt = nowIso()
   return true
 }
@@ -207,6 +219,7 @@ function mergeNotes(localNotes, incomingNotes, myAllowList, myId) {
       existing.updatedAt = peer.updatedAt
       existing.shared = peer.shared
       existing.attachments = peer.attachments
+      existing.color = peer.color
     }
     existing.comments.sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1 })
   })
@@ -299,6 +312,14 @@ function previewBody(body, maxLines, maxChars) {
     text = text + "…"
   }
   return { text: text, truncated: cutByLines || cutByChars }
+}
+// Note tint keys (UI maps them to translucent theme-safe colors).
+// Stored on the note and synced like any other field.
+var NOTE_COLORS = ["red", "orange", "yellow", "green", "blue", "violet"]
+
+function sanitizeColor(value) {
+  var s = normalizeText(value).toLowerCase()
+  return NOTE_COLORS.indexOf(s) !== -1 ? s : ""
 }
 // Plain-text rendering of a note for clipboard copy (title + body).
 function copyText(note) {
@@ -565,6 +586,9 @@ if (typeof module !== "undefined") {
     buildNostrPublish: buildNostrPublish,
     addComment: addComment,
     setShared: setShared,
+    setColor: setColor,
+    sanitizeColor: sanitizeColor,
+    NOTE_COLORS: NOTE_COLORS,
     visibleNotes: visibleNotes,
     mergeNotes: mergeNotes,
     sortNotes: sortNotes

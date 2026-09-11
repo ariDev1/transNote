@@ -62,10 +62,20 @@ Internet notes show a 🌐 badge.
    you open the panel. The panel grows with your notes and scrolls as one
    card when content exceeds the screen. Actions live as quiet icons in the
    title row (share, copy, delete — hover for tooltips); attaching hides
-   behind the 📎 toggle in the comment row. Fenced code blocks
+   behind the 📎 toggle in the comment row. Notes take a translucent tint
+   from the palette button in the title row (or `t` on the keyboard) —
+   synced with the note, plain by default. Fenced code blocks
    (```` ``` ````) render monospace with their language label and a
    per-block **Copy block** button — ideal for moving snippets between
    machines.
+
+## Keyboard
+
+The panel is fully keyboard-driven (Omarchy idiom): `j`/`k` or arrows
+move the note cursor, `Enter` expands, `c` copies, `s` shares, `x`
+deletes your own notes, `a` opens the attach row, `/` jumps to compose,
+`Ctrl+Enter` adds the note, `Esc` closes. Typing in any field passes keys
+through automatically.
 
 The first time, the panel sets everything up by itself (about a minute:
 it prepares the sync helper and creates your private key, which stays on
