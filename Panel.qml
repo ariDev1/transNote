@@ -265,14 +265,20 @@ Panel {
   }
 
   // ------------------------------------------------------------ persist
+  // Snapshot-only write: publishes shared notes WITHOUT touching
+  // notes.json. Used when sync turns on, so configuring Setup can never
+  // rewind the local notes file (it only ever announces current memory).
+  function writeSnapshot() {
+    if (!syncConfigured || syncSnapshotPath === "") return
+    var shared = localNotes.filter(function (n) { return n && n.shared === true })
+    var snapshot = JSON.stringify({ version: 1, deviceId: myId, updatedAt: Store.nowIso(), notes: shared, noteComments: outbox }, null, 2) + "\n"
+    syncSnapshotFile.setText(snapshot)
+  }
+
   function persist() {
     var payload = JSON.stringify({ version: 1, deviceId: myId, notes: localNotes, outbox: outbox }, null, 2) + "\n"
     localFile.setText(payload)
-    if (syncConfigured) {
-      var shared = localNotes.filter(function (n) { return n && n.shared === true })
-      var snapshot = JSON.stringify({ version: 1, deviceId: myId, updatedAt: Store.nowIso(), notes: shared, noteComments: outbox }, null, 2) + "\n"
-      syncSnapshotFile.setText(snapshot)
-    }
+    writeSnapshot()
     // Internet publish queue for the built-in sync: shared notes + outbox
     // comments. sync.mjs encrypts one copy per --recipients pubkey on publish.
     var job = Store.buildNostrPublish(localNotes, outbox)
@@ -961,11 +967,11 @@ Panel {
     if (syncConfigured) {
       syncStatus = "Sync on: " + syncDir
       rescanPeers()
-      // The snapshot is only written by persist() (note actions). Without
-      // this, configuring syncDir via Setup leaves an empty folder until
-      // the user happens to edit a note. Guarded by localLoaded so a
-      // settings update can never wipe notes.json before first load.
-      if (localLoaded) persist()
+      // Snapshot-only (never touches notes.json): configuring Setup
+      // announces current notes immediately instead of leaving an empty
+      // folder until the next note edit. Guarded by localLoaded so a
+      // settings update before first load writes nothing at all.
+      if (localLoaded) writeSnapshot()
     }
     else { syncStatus = "Local only — set syncDir to share"; peerFiles = [] }
   }
@@ -1539,6 +1545,23 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
+        text: root.peerFiles.length > 0
+          ? "Peer files seen here (" + root.peerFiles.length + "): " + root.peerFiles.map(function (p) { return String(p).split("/").pop() }).join(", ")
+          : "No peer files here yet — if the other machine already pressed Save, the two folders are not linked (check Syncthing/sshfs below)."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+      }
+      Button {
+        text: "Check for peers now"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        bordered: true
+        onClicked: root.rescanPeers()
       }
       } // setupSection column
 
