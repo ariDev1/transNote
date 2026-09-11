@@ -108,10 +108,10 @@ Panel {
   property var attachMsg: ({})     // noteId -> status/error text
   property var verifiedAtts: ({})  // "<noteId>/<attId>" -> waiting|ok|bad
   property var attachPaths: ({})   // noteId -> draft source path text
-  property string attachPendingNote: ""
-  property string attachPendingId: ""
-  property string attachPendingDir: ""
-  property string attachPendingName: ""
+  // Notes with a run in flight (cleared per run on completion). Used only
+  // to notice crashed runs; run context itself travels in stdout markers
+  // so concurrent attaches can never cross (single shared slot did).
+  property var attachActive: ({})
   property var verifyJobs: ({})    // "<noteId>/<attId>" -> expected sha256
   function syncAttachDir() {
     return syncConfigured ? syncDir + "/.attachments" : ""
@@ -253,25 +253,43 @@ Panel {
     if (cleanName === "") { setAttachMsg(noteId, "That file name is unusable."); return }
     var attId = Store.uid("att")
     var dir = ownAttachSubdir(noteId)
-    attachPendingNote = noteId
-    attachPendingId = attId
-    attachPendingDir = dir
-    attachPendingName = cleanName
+    var act = {}
+    for (var k in attachActive) act[k] = attachActive[k]
+    act[noteId] = true
+    attachActive = act
     setAttachBusy(noteId, true)
     setAttachMsg(noteId, "Attaching…")
     attachProcess.command = ["bash", "-c",
-      "S=$(stat -c%s " + shellQuote(src) + " 2>/dev/null) || { echo NOSRC; exit 0; }; "
+      "echo '===ATTACHCTX==='; echo 'NOTE:" + noteId + "'; echo 'ATT:" + attId + "'; echo 'NAME:" + cleanName + "'; "
+      + "S=$(stat -c%s " + shellQuote(src) + " 2>/dev/null) || { echo NOSRC; exit 0; }; "
       + "echo SIZE:$S; "
       + "if [ \"$S\" -gt " + Store.MAX_ATTACHMENT_BYTES + " ]; then echo TOOBIG; exit 0; fi; "
       + "mkdir -p " + shellQuote(dir) + " && cp -- " + shellQuote(src) + " " + shellQuote(dir + "/" + attId + "-" + cleanName)
       + " && sha256sum " + shellQuote(dir + "/" + attId + "-" + cleanName)]
     attachProcess.running = true
   }
+  function clearAttachActive(noteId) {
+    if (!attachActive[noteId]) return
+    var act = {}
+    for (var k in attachActive) act[k] = attachActive[k]
+    delete act[noteId]
+    attachActive = act
+  }
   function onAttachOutput(text, exitCode) {
-    var noteId = attachPendingNote
-    if (noteId === "") return
-    attachPendingNote = ""
     var out = String(text || "")
+    var noteId = ""
+    var attId = ""
+    var cleanName = ""
+    out.split("\n").forEach(function (line) {
+      var m = line.match(/^(NOTE|ATT|NAME):(.*)$/)
+      if (m && m[1] === "NOTE") noteId = m[2].trim()
+      else if (m && m[1] === "ATT") attId = m[2].trim()
+      else if (m && m[1] === "NAME") cleanName = m[2].trim()
+    })
+    // No context (stray output): nothing attributable, ignore.
+    if (noteId === "" || attId === "") return
+    clearAttachActive(noteId)
+    var dst = ownAttachSubdir(noteId) + "/" + attId + "-" + cleanName
     if (out.indexOf("NOSRC") !== -1) {
       setAttachBusy(noteId, false)
       setAttachMsg(noteId, "File not found — check the path.")
@@ -290,10 +308,10 @@ Panel {
       var h = line.match(/^([0-9a-f]{64})\s/)
       if (h) sha = h[1]
     })
-    var rec = (size >= 0 && sha !== "") ? Store.createAttachment(attachPendingName, size, sha) : null
-    // Stale sidecar on any failure (partial copy must never linger).
-    if (!rec) {
-      gcProcess.command = ["bash", "-c", "rm -f " + shellQuote(attachPendingDir + "/" + attachPendingId + "-" + attachPendingName)]
+    var rec = (size >= 0 && sha !== "" && cleanName !== "") ? Store.createAttachment(cleanName, size, sha, attId) : null
+    // Stale sidecar of THIS run only (never another run's files).
+    if (!rec || rec.id !== attId) {
+      gcProcess.command = ["bash", "-c", "rm -f " + shellQuote(dst) + " 2>/dev/null; true"]
       gcProcess.running = true
       setAttachBusy(noteId, false)
       setAttachMsg(noteId, exitCode === 0 ? "Couldn't stage that file." : "Attach failed — try again.")
@@ -318,6 +336,31 @@ Panel {
     if (includeSync && syncAttachSubdir(noteId) !== "") dirs.push(syncAttachSubdir(noteId))
     gcProcess.command = ["bash", "-c", "rm -rf " + dirs.map(shellQuote).join(" ") + " 2>/dev/null; true"]
     gcProcess.running = true
+  }
+  // Remove one attachment: drop the record, delete both sidecars.
+  function removeAttachment(noteId, attId) {
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === noteId) {
+        var kept = []
+        var gone = []
+        ;(localNotes[i].attachments || []).forEach(function (a) {
+          var clean = Store.sanitizeAttachment(a)
+          if (clean && clean.id === attId) gone.push(clean)
+          else if (clean) kept.push(clean)
+          else if (a) kept.push(a)
+        })
+        localNotes[i].attachments = kept
+        gone.forEach(function (g) {
+          gcProcess.command = ["bash", "-c",
+            "rm -f " + shellQuote(ownAttachSubdir(noteId) + "/" + g.id + "-" + g.name)
+            + " " + shellQuote(syncAttachSubdir(noteId) + "/" + g.id + "-" + g.name) + " 2>/dev/null; true"]
+          gcProcess.running = true
+        })
+        touchLocalNotes()
+        break
+      }
+    }
+    persist()
   }
   // Re-verify every peer attachment: present + hash match → ok, absent →
   // waiting (still syncing), mismatch → bad. Runs after each peer fetch.
@@ -608,6 +651,37 @@ Panel {
     var shared = localNotes.filter(function (n) { return n && n.shared === true })
     var snapshot = JSON.stringify({ version: 1, deviceId: myId, updatedAt: Store.nowIso(), notes: shared, noteComments: outbox }, null, 2) + "\n"
     syncSnapshotFile.setText(snapshot)
+    mirrorSharedAttachments()
+  }
+  // Mirror shared notes' sidecars into the synced dot-dir (one guarded
+  // batch; cmp avoids rewrite churn that would re-trigger file sync).
+  // Without this, peers get metadata with no bytes — hash "bad" forever.
+  function mirrorSharedAttachments() {
+    if (!syncConfigured || mirrorProcess.running) return
+    var copies = []
+    localNotes.forEach(function (n) {
+      if (!n || n.shared !== true) return
+      ;(n.attachments || []).forEach(function (a) {
+        var clean = Store.sanitizeAttachment(a)
+        if (!clean) return
+        copies.push({
+          src: ownAttachSubdir(n.id) + "/" + clean.id + "-" + clean.name,
+          dst: syncAttachSubdir(n.id) + "/" + clean.id + "-" + clean.name
+        })
+      })
+    })
+    if (copies.length === 0) return
+    var cmds = ["mkdir -p " + shellQuote(syncAttachDir())]
+    copies.forEach(function (c) {
+      // Each unit swallows its own failure (missing src skips quietly) so
+      // one bad file never blocks the rest.
+      cmds.push("cmp -s " + shellQuote(c.src) + " " + shellQuote(c.dst)
+        + " || { mkdir -p " + shellQuote(c.dst.split("/").slice(0, -1).join("/"))
+        + " && cp -- " + shellQuote(c.src) + " " + shellQuote(c.dst)
+        + " && chmod 600 " + shellQuote(c.dst) + "; } || true")
+    })
+    mirrorProcess.command = ["bash", "-c", cmds.join("\n")]
+    mirrorProcess.running = true
   }
 
   function persist() {
@@ -1165,14 +1239,28 @@ Panel {
       onStreamFinished: root.onAttachOutput(text, 0)
     }
     onExited: function (exitCode) {
-      // Empty stdout with failure (e.g. cp error) still needs feedback.
-      if (exitCode !== 0 && root.attachPendingNote !== "") root.onAttachOutput("", exitCode)
+      // Crashed run with no stdout: context unknown, so only clear + flag
+      // in-flight notes. A concurrent healthy run overwrites this with its
+      // own outcome when its stdout lands.
+      if (exitCode !== 0) {
+        for (var k in root.attachActive) {
+          root.setAttachBusy(k, false)
+          root.setAttachMsg(k, "Attach interrupted — try again.")
+        }
+        root.attachActive = ({})
+      }
     }
   }
 
   // Fire-and-forget sidecar cleanup.
   Process {
     id: gcProcess
+    running: false
+  }
+
+  // Shared-sidecar mirror (see mirrorSharedAttachments).
+  Process {
+    id: mirrorProcess
     running: false
   }
 
@@ -1884,6 +1972,13 @@ Panel {
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: root.openAttachment(note, att)
+                  }
+                  Button {
+                    visible: isOwn
+                    text: "Remove"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.removeAttachment(note.id, att.id)
                   }
                 }
               }

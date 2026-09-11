@@ -415,13 +415,16 @@ function sanitizeAttachment(raw) {
 }
 
 // Local construction after hashing. Null when unusable (caller messages).
-function createAttachment(name, size, sha256) {
+// Pass the pre-generated attId so concurrent panel runs can match their
+// own completion; falls back to a fresh uid when omitted.
+function createAttachment(name, size, sha256, id) {
   var clean = sanitizeFileName(name)
   var s = Math.floor(Number(size))
   var sha = normalizeText(sha256).toLowerCase()
+  var attId = normalizeText(id) !== "" ? normalizeText(id) : uid("att")
   if (clean === "" || !isFinite(s) || s < 0 || s > MAX_ATTACHMENT_BYTES) return null
   if (!/^[0-9a-f]{64}$/.test(sha)) return null
-  return { id: uid("att"), name: clean, size: s, sha256: sha, mime: mimeForName(clean), kind: attachmentKindFor(clean) }
+  return { id: attId, name: clean, size: s, sha256: sha, mime: mimeForName(clean), kind: attachmentKindFor(clean) }
 }
 
 // Extensions the panel will save but never Open (save-only + notice).

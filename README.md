@@ -77,7 +77,8 @@ Attach files to your own notes: paste a path in the attach row, press
 *attached files* are the real files:
 
 - Bytes travel as sidecars in `<syncDir>/.attachments/` (synced like the
-  snapshots); the note itself carries only name, size, and SHA-256.
+  snapshots; list with `ls -la`, plain `ls` hides dot-dirs); the note
+  itself carries only name, size, and SHA-256.
 - Max **25 MB** per file, rejected with a message.
 - Images show a thumbnail, text files a peek, everything a
   **verified ✓** badge once the local re-hash matches (mismatch warns,
