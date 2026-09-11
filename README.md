@@ -21,6 +21,8 @@ Internet notes show a 🌐 badge.
 ## Use it
 
 1. Open TransNote in the bar and write a note. Press **Share** on it.
+   **Delete** is offered on all your local notes; **Share** only on notes
+   authored under your current machine name.
 2. To share on your local network (folder sync, works offline) — no terminal needed:
    - Open TransNote in the bar → **Setup** tab.
    - **1 — Name this machine** (e.g. `laptop`), press **Save**.
@@ -140,7 +142,8 @@ Work down this list — it covers every failure seen in real LAN testing:
 4. **Does each allow-list name the other's author?** Matching is against
    note *authors* (the machine name active when the note was created),
    not file names. `Sharing with: …` in the footer shows your effective
-   list.
+   list. If a Save doesn't take effect, `omarchy restart shell` is the
+   reliable closer after identity/allow-list changes.
 5. **Wait ~15 seconds** (folder poll cadence), then check Setup's
    **Diagnostics** line: `files=` (scan) → `fetched=`/`snapNotes=`
    (read) → `peerNotes=` (merge) → `shown=` (display) pinpoints the stage.
