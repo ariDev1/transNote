@@ -100,10 +100,14 @@ Panel {
   readonly property string clipboardStagingPath: dataDir + "/clipboard.txt"
   function copyNoteFull(note) {
     if (!note || !note.id) return
-    pendingCopyNoteId = note.id
+    copyRawText(Store.copyText(note), note.id)
+  }
+  function copyRawText(text, key) {
+    if (!key) return
+    pendingCopyNoteId = key
     copiedNoteId = ""
     copyFailedId = ""
-    clipboardFile.setText(Store.copyText(note))
+    clipboardFile.setText(String(text || ""))
     copyDelay.restart()
   }
   // Visible section of the panel (the card is capped at 520px with no
@@ -1384,15 +1388,79 @@ Panel {
               maximumLineCount: 1
             }
           }
-          Text {
-            id: bodyText
+          // Body renders as segments: prose as usual, ```fenced code blocks
+          // monospace + no-wrap in a horizontal scroller with language label
+          // and per-block copy. Collapsed notes show the plain preview.
+          Column {
             width: parent.width
-            text: root.isExpanded(note.id) ? note.body : bodyPreview.text
             visible: note.body !== ""
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WrapAnywhere
+            spacing: Style.space(4)
+            property var segments: {
+              var raw = root.isExpanded(note.id) ? Store.parseSegments(note.body) : [{ type: "text", lang: "", content: bodyPreview.text }]
+              var ci = 0
+              return raw.map(function (s) {
+                if (s && s.type === "code") s.key = note.id + "#b" + (ci++)
+                return s
+              })
+            }
+            Repeater {
+              model: parent.segments
+              delegate: Column {
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(4)
+                Text {
+                  visible: modelData.type !== "code"
+                  width: parent.width
+                  text: modelData.content
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.WrapAnywhere
+                }
+                Column {
+                  visible: modelData.type === "code"
+                  width: parent.width
+                  spacing: Style.space(4)
+                  RowLayout {
+                    width: parent.width
+                    spacing: Style.space(6)
+                    Text {
+                      Layout.fillWidth: true
+                      Layout.minimumWidth: 0
+                      text: modelData.lang !== "" ? modelData.lang : "code"
+                      color: Qt.darker(root.foreground, 1.4)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      maximumLineCount: 1
+                      elide: Text.ElideRight
+                    }
+                    Button {
+                      property string blockKey: modelData.key || note.id
+                      text: root.copyFailedId === blockKey ? "Failed" : (root.copiedNoteId === blockKey ? "Copied!" : "Copy block")
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: root.copyRawText(modelData.content, blockKey)
+                    }
+                  }
+                  ScrollView {
+                    width: parent.width
+                    height: Math.min(codeText.implicitHeight, Style.space(220))
+                    clip: true
+                    ScrollBar.horizontal.policy: ScrollBar.AsNeeded
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                    Text {
+                      id: codeText
+                      text: modelData.content
+                      font.family: "monospace"
+                      font.pixelSize: Style.font.body
+                      color: root.foreground
+                      wrapMode: Text.NoWrap
+                    }
+                  }
+                }
+              }
+            }
           }
           Button {
             visible: bodyPreview.truncated || root.isExpanded(note.id)

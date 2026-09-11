@@ -322,6 +322,45 @@ function isSyncArtifact(name) {
   if (lower.slice(-4) === ".tmp" || lower.slice(-4) === ".bak") return true
   return false
 }
+// Split a note body into [{ type: "text"|"code", lang, content }] on
+// triple-backtick fences. The fence remainder is the language tag (trimmed,
+// max 20 chars). An unclosed fence runs to the end. Fences indented 4+
+// spaces are plain text. Empty segments are dropped.
+function parseSegments(body) {
+  var src = String(body === undefined || body === null ? "" : body).replace(/\r\n/g, "\n")
+  if (src === "") return []
+  var lines = src.split("\n")
+  var segs = []
+  var buf = []
+  var inCode = false
+  var lang = ""
+  function fenceOf(line) {
+    var t = String(line).replace(/^\s{0,3}/, "")
+    if (t.slice(0, 3) !== "```") return null
+    return t.slice(3).trim().slice(0, 20)
+  }
+  function flush(type, content) {
+    if (content !== "") segs.push({ type: type, lang: type === "code" ? lang : "", content: content })
+  }
+  for (var i = 0; i < lines.length; i++) {
+    var f = fenceOf(lines[i])
+    if (f !== null && !inCode) {
+      flush("text", buf.join("\n"))
+      buf = []
+      inCode = true
+      lang = f
+    } else if (f !== null && inCode) {
+      flush("code", buf.join("\n"))
+      buf = []
+      inCode = false
+      lang = ""
+    } else {
+      buf.push(lines[i])
+    }
+  }
+  flush(inCode ? "code" : "text", buf.join("\n"))
+  return segs
+}
 // Friends file (managed in the panel UI, no terminal needed):
 // { version: 1, friends: [{ hex, name }] }. Accepts the raw file text,
 // the parsed object, or an already-clean array (idempotent).
@@ -438,6 +477,7 @@ if (typeof module !== "undefined") {
     mergeForeignComments: mergeForeignComments,
     pruneOutbox: pruneOutbox,
     previewBody: previewBody,
+    parseSegments: parseSegments,
     copyText: copyText,
     isSyncArtifact: isSyncArtifact,
     hexRecipients: hexRecipients,

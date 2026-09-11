@@ -58,7 +58,10 @@ Internet notes show a 🌐 badge.
    its title + body on the clipboard (no fiddly text selection needed).
    Fresh arrivals show a **• new** pill and a dot on the bar icon until
    you open the panel. The panel grows with your notes and scrolls as one
-   card when content exceeds the screen.
+   card when content exceeds the screen. Fenced code blocks
+   (```` ``` ````) render monospace with their language label and a
+   per-block **Copy block** button — ideal for moving snippets between
+   machines.
 
 The first time, the panel sets everything up by itself (about a minute:
 it prepares the sync helper and creates your private key, which stays on
