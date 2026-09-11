@@ -306,6 +306,22 @@ function copyText(note) {
   if (title !== "" && body !== "") return title + "\n\n" + body
   return title !== "" ? title : body
 }
+// Sync-artifact filenames that must never be treated as peer snapshots:
+// Syncthing conflict copies (`<id>.sync-conflict-<date>.json`), Dropbox
+// conflict copies (`<id> (conflicted copy …).json`), and hidden files.
+// Without this, a conflict file would impersonate a peer device (it ends
+// in .json) and could resurrect deleted notes on merge.
+function isSyncArtifact(name) {
+  var s = String(name === undefined || name === null ? "" : name)
+  if (s === "") return true
+  var base = s.split("/").pop()
+  if (base.charAt(0) === ".") return true
+  var lower = base.toLowerCase()
+  if (lower.indexOf(".sync-conflict-") !== -1) return true
+  if (lower.indexOf("conflicted copy") !== -1) return true
+  if (lower.slice(-4) === ".tmp" || lower.slice(-4) === ".bak") return true
+  return false
+}
 // Friends file (managed in the panel UI, no terminal needed):
 // { version: 1, friends: [{ hex, name }] }. Accepts the raw file text,
 // the parsed object, or an already-clean array (idempotent).
@@ -423,6 +439,7 @@ if (typeof module !== "undefined") {
     pruneOutbox: pruneOutbox,
     previewBody: previewBody,
     copyText: copyText,
+    isSyncArtifact: isSyncArtifact,
     hexRecipients: hexRecipients,
     sanitizeFriends: sanitizeFriends,
     effectiveNostrAllow: effectiveNostrAllow,

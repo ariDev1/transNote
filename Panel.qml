@@ -46,6 +46,11 @@ Panel {
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/transnote"
   readonly property string notesPath: dataDir + "/notes.json"
+  // Previous saved state of notes.json, rotated on every save. Recovery:
+  // copy it over notes.json (see README troubleshooting). Guards the
+  // private/local-only notes that exist nowhere else.
+  readonly property string notesBakPath: dataDir + "/notes.json.bak"
+  property string lastLocalRaw: ""
   readonly property string syncSnapshotPath: syncConfigured ? syncDir + "/" + myId + ".json" : ""
   // Internet (Nostr) sync files in the private data dir. The panel runs
   // nostr/sync.mjs itself (no terminal needed): it writes
@@ -310,7 +315,7 @@ Panel {
   // (The sync folder itself must also stay non-shared — see README.)
   function secureFiles() {
     if (!secureProcess.running) {
-      var files = [notesPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
+      var files = [notesPath, notesBakPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
       if (syncSnapshotPath !== "") files.push(syncSnapshotPath)
       secureProcess.command = ["bash", "-c",
         "chmod 700 " + shellQuote(dataDir) + " 2>/dev/null; chmod 600 "
@@ -332,7 +337,11 @@ Panel {
 
   function persist() {
     var payload = JSON.stringify({ version: 1, deviceId: myId, notes: localNotes, outbox: outbox }, null, 2) + "\n"
+    // Rotate the previous state aside first (skipped on the very first save
+    // when nothing was loaded yet) — never overwrites the backup with empty.
+    if (lastLocalRaw !== "") notesBakFile.setText(lastLocalRaw)
     localFile.setText(payload)
+    lastLocalRaw = payload
     writeSnapshot()
     // Internet publish queue for the built-in sync: shared notes + outbox
     // comments. sync.mjs encrypts one copy per --recipients pubkey on publish.
@@ -343,6 +352,7 @@ Panel {
   }
 
   function loadLocal(raw) {
+    lastLocalRaw = String(raw || "")
     var notes = []
     var box = []
     try {
@@ -723,8 +733,17 @@ Panel {
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadLocal(text())
-    onLoadFailed: { root.localNotes = []; root.localLoaded = true; root.refreshDisplay() }
+    onLoadFailed: { root.localNotes = []; root.localLoaded = true; root.lastLocalRaw = ""; root.refreshDisplay() }
     onFileChanged: reload()
+  }
+
+  // Previous-state backup of notes.json (written by persist, never watched).
+  FileView {
+    id: notesBakFile
+    path: root.notesBakPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
   }
 
   FileView {
@@ -994,7 +1013,9 @@ Panel {
     var own = myId + ".json"
     String(output || "").split("\n").forEach(function (line) {
       var name = line.trim()
-      if (name.slice(-5) === ".json" && name !== own) files.push(syncDir + "/" + name)
+      if (name.slice(-5) !== ".json" || name === own) return
+      if (Store.isSyncArtifact(name)) return
+      files.push(syncDir + "/" + name)
     })
     files.sort()
     if (JSON.stringify(files) !== JSON.stringify(peerFiles)) peerFiles = files

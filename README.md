@@ -137,6 +137,12 @@ Work down this list — it covers every failure seen in real LAN testing:
 5. **Wait ~15 seconds** (folder poll cadence), then check Setup's
    **Diagnostics** line: `files=` (scan) → `fetched=`/`snapNotes=`
    (read) → `peerNotes=` (merge) → `shown=` (display) pinpoints the stage.
+6. **Lost local notes?** Every save rotates the previous state aside to
+   `~/.local/share/transnote/notes.json.bak` (owner-only, like everything
+   else). Recover with:
+   `cp ~/.local/share/transnote/notes.json.bak ~/.local/share/transnote/notes.json`
+   — the panel picks it up by itself. Conflict copies
+   (`*.sync-conflict-*.json`) in the sync folder are ignored, never merged.
 
 ## Files (for the curious)
 
