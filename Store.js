@@ -322,13 +322,11 @@ function sanitizeColor(value) {
   var s = normalizeText(value).toLowerCase()
   return NOTE_COLORS.indexOf(s) !== -1 ? s : ""
 }
-// Plain-text rendering of a note for clipboard copy (title + body).
+// Plain-text rendering of a note for clipboard copy: body only, never the
+// headline (titles are labels, not content).
 function copyText(note) {
   if (!note || typeof note !== "object") return ""
-  var title = normalizeText(note.title)
-  var body = String(note.body === undefined || note.body === null ? "" : note.body).replace(/\r\n/g, "\n")
-  if (title !== "" && body !== "") return title + "\n\n" + body
-  return title !== "" ? title : body
+  return String(note.body === undefined || note.body === null ? "" : note.body).replace(/\r\n/g, "\n")
 }
 // Sync-artifact filenames that must never be treated as peer snapshots:
 // Syncthing conflict copies (`<id>.sync-conflict-<date>.json`), Dropbox

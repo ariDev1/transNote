@@ -57,7 +57,8 @@ Internet notes show a 🌐 badge.
 4. That's it. Shared notes sync by themselves about once a minute
    (or press **Sync now**). Your friend's notes appear marked with 🌐,
    and you can comment on them. Every note has a **Copy** button that puts
-   its title + body on the clipboard (no fiddly text selection needed).
+   its content (never the headline) on the clipboard — no fiddly text
+   selection needed.
    Fresh arrivals show a **• new** pill and a dot on the bar icon until
    you open the panel. The panel grows with your notes and scrolls as one
    card when content exceeds the screen. Actions live as quiet icons in the

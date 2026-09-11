@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ariDev1.transnote",
   "name": "TransNote",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "author": "ariDev1",
   "description": "Fast shared text notes: write notes, share with friends, read and comment. Works locally, via shared folders, and over the internet (encrypted). No terminal needed.",
   "kinds": [
