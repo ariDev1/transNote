@@ -331,11 +331,15 @@ Panel {
   function rebuildPeerNotes() {
     var all = []
     var pairs = []
+    var states = []
     for (var i = 0; i < peerInstantiator.count; i++) {
       var obj = peerInstantiator.objectAt(i)
       if (obj && obj.snapshot) {
         all = all.concat(obj.snapshot.notes)
         pairs = pairs.concat(obj.snapshot.pairs)
+        states.push(obj.loadState || "?")
+      } else {
+        states.push("no-obj")
       }
     }
     // De-duplicate by note id, newest first; drop notes I authored (mine win).
@@ -352,11 +356,11 @@ Panel {
     if (JSON.stringify(pruned) !== JSON.stringify(outbox)) {
       outbox = pruned
       persist()
-      peerDebug = "files=" + peerFiles.length + " snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length + " (pruned, reloading)"
+      peerDebug = "files=" + peerFiles.length + " delegates=" + peerInstantiator.count + " [" + states.join(",") + "] snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length + " (pruned, reloading)"
       return
     }
     refreshDisplay()
-    peerDebug = "files=" + peerFiles.length + " snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length
+    peerDebug = "files=" + peerFiles.length + " delegates=" + peerInstantiator.count + " [" + states.join(",") + "] snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length
   }
 
   // Internet fetch output (written by the built-in sync, read back here).
@@ -718,6 +722,16 @@ Panel {
     onFileChanged: reload()
   }
 
+  // Folder-merge diagnostics for troubleshooting without log access.
+  // Written whenever peerDebug changes; safe to cat from a terminal.
+  FileView {
+    id: peerDebugFile
+    path: root.dataDir + "/folder_debug.json"
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+  }
+
   // ---- background workers for internet setup + sync (no terminal) ----
   Process {
     id: nodeProbe
@@ -908,6 +922,9 @@ Panel {
     })
     files.sort()
     if (JSON.stringify(files) !== JSON.stringify(peerFiles)) peerFiles = files
+    // Marker so the debug file shows scan state even if no delegate ever
+    // reports back (rebuildPeerNotes overwrites this with full detail).
+    if (peerDebug === "" && files.length > 0) peerDebug = "listed " + files.length + " file(s), waiting for load…"
   }
 
   function rescanPeers() {
@@ -924,16 +941,18 @@ Panel {
     delegate: Item {
       required property var modelData
       property var snapshot: ({ notes: [], pairs: [] })
+      property string loadState: "pending"
       FileView {
         path: modelData
         watchChanges: true
         printErrors: false
         onFileChanged: reload()
         onLoaded: {
+          parent.loadState = "ok"
           parent.snapshot = root.loadPeerSnapshot(text())
           root.rebuildPeerNotes()
         }
-        onLoadFailed: { parent.snapshot = ({ notes: [], pairs: [] }); root.rebuildPeerNotes() }
+        onLoadFailed: { parent.loadState = "failed"; parent.snapshot = ({ notes: [], pairs: [] }); root.rebuildPeerNotes() }
       }
     }
     onObjectAdded: root.rebuildPeerNotes()
@@ -972,14 +991,17 @@ Panel {
   onSyncConfiguredChanged: {
     if (syncConfigured) {
       syncStatus = "Sync on: " + syncDir
-      rescanPeers()
-      // Snapshot-only (never touches notes.json): configuring Setup
+      rescanPeers()      // Snapshot-only (never touches notes.json): configuring Setup
       // announces current notes immediately instead of leaving an empty
       // folder until the next note edit. Guarded by localLoaded so a
       // settings update before first load writes nothing at all.
       if (localLoaded) writeSnapshot()
     }
     else { syncStatus = "Local only — set syncDir to share"; peerFiles = [] }
+  }
+
+  onPeerDebugChanged: {
+    if (peerDebug !== "") peerDebugFile.setText(peerDebug + "\n")
   }
 
   // ---------------------------------------------------------------- IPC
