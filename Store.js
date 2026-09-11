@@ -89,11 +89,13 @@ function sanitizeNote(raw) {
     var c = sanitizeComment(comments[i])
     if (c) note.comments.push(c)
   }
-  // Attachments are accepted and preserved verbatim so a future version can
-  // render them; unknown entry shapes are dropped.
+  // Attachments are accepted only as strict records (see
+  // sanitizeAttachment): unknown or oversized entries are dropped, so a
+  // hostile snapshot cannot smuggle paths or giant blobs into the UI.
   var atts = Array.isArray(raw.attachments) ? raw.attachments : []
   for (var j = 0; j < atts.length; j++) {
-    if (atts[j] && typeof atts[j] === "object" && normalizeText(atts[j].id) !== "") note.attachments.push(atts[j])
+    var a = sanitizeAttachment(atts[j])
+    if (a) note.attachments.push(a)
   }
   return note
 }
@@ -361,6 +363,72 @@ function parseSegments(body) {
   flush(inCode ? "code" : "text", buf.join("\n"))
   return segs
 }
+// Attachments (MVP: folder-sync sidecars, metadata inline in the note).
+// Per-file cap keeps every 15s sync snappy; bytes live in
+// <syncDir>/.attachments/<noteId>/<attId>-<name>, never in JSON.
+var MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+// Basename only, traversal-proof: strips directories, whitelists chars,
+// never leading-dot, max 100 chars. "" = unusable, caller must reject.
+function sanitizeFileName(name) {
+  var s = String(name === undefined || name === null ? "" : name)
+  s = s.split("/").pop().split("\\").pop()
+  s = s.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^\.+/, "").slice(0, 100)
+  if (s === "" || s === "." || s === "..") return ""
+  return s
+}
+
+function attachmentKindFor(name) {
+  var ext = String(name || "").split(".").pop().toLowerCase()
+  var images = { png: 1, jpg: 1, jpeg: 1, gif: 1, webp: 1, bmp: 1, svg: 1 }
+  var texts = {
+    txt: 1, md: 1, markdown: 1, log: 1, json: 1, js: 1, mjs: 1, ts: 1,
+    qml: 1, sh: 1, py: 1, rb: 1, java: 1, c: 1, h: 1, cpp: 1, hpp: 1,
+    rs: 1, go: 1, css: 1, html: 1, htm: 1, xml: 1, yml: 1, yaml: 1,
+    toml: 1, ini: 1, cfg: 1, conf: 1, csv: 1, tsv: 1, diff: 1, patch: 1,
+    tex: 1, vue: 1
+  }
+  if (images[ext]) return "image"
+  if (texts[ext]) return "text"
+  return "file"
+}
+
+function mimeForName(name) {
+  var ext = String(name || "").split(".").pop().toLowerCase()
+  if (attachmentKindFor(name) === "image") return "image/" + (ext === "svg" ? "svg+xml" : (ext === "jpg" ? "jpeg" : ext))
+  if (attachmentKindFor(name) === "text") return "text/plain"
+  return "application/octet-stream"
+}
+
+// Strict receipt validation: recomputes mime/kind, never trusts them.
+// Returns a clean record or null.
+function sanitizeAttachment(raw) {
+  if (!raw || typeof raw !== "object") return null
+  var id = normalizeText(raw.id)
+  var name = sanitizeFileName(raw.name)
+  var size = Math.floor(Number(raw.size))
+  var sha = normalizeText(raw.sha256).toLowerCase()
+  if (id === "" || name === "") return null
+  if (!isFinite(size) || size < 0 || size > MAX_ATTACHMENT_BYTES) return null
+  if (!/^[0-9a-f]{64}$/.test(sha)) return null
+  return { id: id, name: name, size: size, sha256: sha, mime: mimeForName(name), kind: attachmentKindFor(name) }
+}
+
+// Local construction after hashing. Null when unusable (caller messages).
+function createAttachment(name, size, sha256) {
+  var clean = sanitizeFileName(name)
+  var s = Math.floor(Number(size))
+  var sha = normalizeText(sha256).toLowerCase()
+  if (clean === "" || !isFinite(s) || s < 0 || s > MAX_ATTACHMENT_BYTES) return null
+  if (!/^[0-9a-f]{64}$/.test(sha)) return null
+  return { id: uid("att"), name: clean, size: s, sha256: sha, mime: mimeForName(clean), kind: attachmentKindFor(clean) }
+}
+
+// Extensions the panel will save but never Open (save-only + notice).
+function isRiskyExecutable(name) {
+  var ext = String(name || "").split(".").pop().toLowerCase()
+  return { sh: 1, exe: 1, bin: 1, run: 1, appimage: 1, deb: 1, rpm: 1, bat: 1, cmd: 1, ps1: 1, com: 1, scr: 1, msi: 1 }[ext] === 1
+}
 // Friends file (managed in the panel UI, no terminal needed):
 // { version: 1, friends: [{ hex, name }] }. Accepts the raw file text,
 // the parsed object, or an already-clean array (idempotent).
@@ -478,6 +546,13 @@ if (typeof module !== "undefined") {
     pruneOutbox: pruneOutbox,
     previewBody: previewBody,
     parseSegments: parseSegments,
+    sanitizeAttachment: sanitizeAttachment,
+    createAttachment: createAttachment,
+    sanitizeFileName: sanitizeFileName,
+    attachmentKindFor: attachmentKindFor,
+    mimeForName: mimeForName,
+    isRiskyExecutable: isRiskyExecutable,
+    MAX_ATTACHMENT_BYTES: MAX_ATTACHMENT_BYTES,
     copyText: copyText,
     isSyncArtifact: isSyncArtifact,
     hexRecipients: hexRecipients,

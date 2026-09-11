@@ -98,6 +98,276 @@ Panel {
   property string copiedNoteId: ""
   property string copyFailedId: ""
   readonly property string clipboardStagingPath: dataDir + "/clipboard.txt"
+  // Attachments (MVP): sidecar bytes + inline metadata records.
+  // - Own notes: attach here, bytes under dataDir/attachments/<noteId>/.
+  // - Shared notes: bytes mirrored under <syncDir>/.attachments/<noteId>/
+  //   (dot-dir, invisible to the *.json peer scan) and carried by whatever
+  //   syncs the folder. Peers verify hash before trusting.
+  readonly property string localAttachDir: dataDir + "/attachments"
+  property var attachBusy: ({})    // noteId -> true while copying+hashing
+  property var attachMsg: ({})     // noteId -> status/error text
+  property var verifiedAtts: ({})  // "<noteId>/<attId>" -> waiting|ok|bad
+  property var attachPaths: ({})   // noteId -> draft source path text
+  property string attachPendingNote: ""
+  property string attachPendingId: ""
+  property string attachPendingDir: ""
+  property string attachPendingName: ""
+  property var verifyJobs: ({})    // "<noteId>/<attId>" -> expected sha256
+  function syncAttachDir() {
+    return syncConfigured ? syncDir + "/.attachments" : ""
+  }
+  function ownAttachSubdir(noteId) {
+    return localAttachDir + "/" + noteId
+  }
+  function syncAttachSubdir(noteId) {
+    var d = syncAttachDir()
+    return d === "" ? "" : d + "/" + noteId
+  }
+  // Byte location for one attachment: own notes live locally, peers' notes
+  // in the synced dot-dir. "" when unresolvable (should not happen).
+  function attPathFor(note, att) {
+    if (!note || !att) return ""
+    var base = (note.author === myId) ? ownAttachSubdir(note.id) : syncAttachSubdir(note.id)
+    if (base === "") return ""
+    return base + "/" + att.id + "-" + att.name
+  }
+  function attUrl(path) {
+    return "file://" + String(path || "").split("/").map(encodeURIComponent).join("/")
+  }
+  function formatSize(b) {
+    var n = Number(b) || 0
+    if (n < 1024) return n + " B"
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB"
+    return (n / 1048576).toFixed(1) + " MB"
+  }
+  // Sanitized attachments of one note (never renders hostile records).
+  function cleanAttachments(note) {
+    var out = []
+    ;((note && note.attachments) || []).forEach(function (a) {
+      var c = Store.sanitizeAttachment(a)
+      if (c) out.push(c)
+    })
+    return out
+  }
+  // Text-peek cache for text attachments: key "<noteId>/<attId>".
+  property var attPeeks: ({})
+  function setAttPeek(key, text) {
+    var m = {}
+    for (var k in attPeeks) m[k] = attPeeks[k]
+    m[key] = String(text || "")
+    attPeeks = m
+  }
+  function peekLines(key) {
+    var lines = String(attPeeks[key] || "").replace(/\r\n/g, "\n").split("\n")
+    if (lines.length <= 30) return lines.join("\n")
+    return lines.slice(0, 30).join("\n") + "\n…"
+  }
+  property string savePendingNote: ""
+  property string openPendingNote: ""
+  property string openPendingName: ""
+  // Save a received file to ~/Downloads (never overwrites: .1, .2…).
+  function saveAttachment(note, att) {
+    var clean = Store.sanitizeAttachment(att)
+    if (!note || !clean) return
+    var src = attPathFor(note, clean)
+    if (src === "") { setAttachMsg(note.id, "File not found."); return }
+    var dl = (home || "") + "/Downloads"
+    savePendingNote = note.id
+    setAttachMsg(note.id, "Saving…")
+    saveProcess.command = ["bash", "-c",
+      "mkdir -p " + shellQuote(dl) + " && dst=" + shellQuote(dl + "/" + clean.name)
+      + "; n=1; while test -e \"$dst\"; do n=$((n + 1)); dst=" + shellQuote(dl + "/" + clean.name) + ".$n; done; "
+      + "cp -- " + shellQuote(src) + " \"$dst\" && echo SAVED:$dst"]
+    saveProcess.running = true
+  }
+  function onSaveOutput(text, exitCode) {
+    var noteId = savePendingNote
+    savePendingNote = ""
+    if (noteId === "") return
+    if (exitCode === 0 && String(text || "").indexOf("SAVED:") !== -1) {
+      var p = String(text).split("SAVED:")[1].trim().split("\n")[0]
+      var short = p.replace((home || "") + "/", "~/")
+      setAttachMsg(noteId, "Saved to " + short)
+    } else {
+      setAttachMsg(noteId, "Save failed — file may not have arrived yet.")
+    }
+  }
+  // Open explicitly via the system handler. Executables are save-only:
+  // risky extensions and anything with the exec bit are refused here.
+  function openAttachment(note, att) {
+    var clean = Store.sanitizeAttachment(att)
+    if (!note || !clean) return
+    if (Store.isRiskyExecutable(clean.name)) {
+      setAttachMsg(note.id, clean.name + " looks executable — saved copies only, never opened.")
+      return
+    }
+    var src = attPathFor(note, clean)
+    if (src === "") { setAttachMsg(note.id, "File not found."); return }
+    openPendingNote = note.id
+    openPendingName = clean.name
+    openProcess.command = ["bash", "-c",
+      "test -f " + shellQuote(src) + " || { echo MISSING; exit 0; }; "
+      + "test -x " + shellQuote(src) + " && { echo EXECBIT; exit 0; }; "
+      + "xdg-open " + shellQuote(src) + " >/dev/null 2>&1 & echo OPENED"]
+    openProcess.running = true
+  }
+  function onOpenOutput(text) {
+    var noteId = openPendingNote
+    var name = openPendingName
+    openPendingNote = ""
+    openPendingName = ""
+    if (noteId === "") return
+    var out = String(text || "")
+    if (out.indexOf("EXECBIT") !== -1) setAttachMsg(noteId, name + " has the executable bit — save instead.")
+    else if (out.indexOf("MISSING") !== -1) setAttachMsg(noteId, "File not arrived yet — try again in a bit.")
+    else setAttachMsg(noteId, "Opening " + name + "…")
+  }
+  function setAttachMsg(noteId, msg) {
+    var m = {}
+    for (var k in attachMsg) m[k] = attachMsg[k]
+    if (msg === "") delete m[noteId]
+    else m[noteId] = msg
+    attachMsg = m
+  }
+  function setAttachBusy(noteId, busy) {
+    var b = {}
+    for (var k in attachBusy) b[k] = attachBusy[k]
+    if (busy) b[noteId] = true
+    else delete b[noteId]
+    attachBusy = b
+  }
+  // Attach a file (own notes only): size gate → stage copy → sha256, one
+  // shell chain. Record joins note.attachments on success; persist()
+  // publishes the metadata, the folder sync carries the bytes.
+  function attachFile(noteId, srcRaw) {
+    var src = Store.normalizeText(srcRaw)
+    if (attachBusy[noteId]) return
+    if (src === "") { setAttachMsg(noteId, "Enter a file path first."); return }
+    var note = null
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === noteId) { note = localNotes[i]; break }
+    }
+    if (!note) return
+    if (src[0] === "~") src = (home || "") + src.slice(1)
+    var cleanName = Store.sanitizeFileName(src.split("/").pop())
+    if (cleanName === "") { setAttachMsg(noteId, "That file name is unusable."); return }
+    var attId = Store.uid("att")
+    var dir = ownAttachSubdir(noteId)
+    attachPendingNote = noteId
+    attachPendingId = attId
+    attachPendingDir = dir
+    attachPendingName = cleanName
+    setAttachBusy(noteId, true)
+    setAttachMsg(noteId, "Attaching…")
+    attachProcess.command = ["bash", "-c",
+      "S=$(stat -c%s " + shellQuote(src) + " 2>/dev/null) || { echo NOSRC; exit 0; }; "
+      + "echo SIZE:$S; "
+      + "if [ \"$S\" -gt " + Store.MAX_ATTACHMENT_BYTES + " ]; then echo TOOBIG; exit 0; fi; "
+      + "mkdir -p " + shellQuote(dir) + " && cp -- " + shellQuote(src) + " " + shellQuote(dir + "/" + attId + "-" + cleanName)
+      + " && sha256sum " + shellQuote(dir + "/" + attId + "-" + cleanName)]
+    attachProcess.running = true
+  }
+  function onAttachOutput(text, exitCode) {
+    var noteId = attachPendingNote
+    if (noteId === "") return
+    attachPendingNote = ""
+    var out = String(text || "")
+    if (out.indexOf("NOSRC") !== -1) {
+      setAttachBusy(noteId, false)
+      setAttachMsg(noteId, "File not found — check the path.")
+      return
+    }
+    if (out.indexOf("TOOBIG") !== -1) {
+      setAttachBusy(noteId, false)
+      setAttachMsg(noteId, "Too big — max " + Math.round(Store.MAX_ATTACHMENT_BYTES / 1048576) + " MB per file.")
+      return
+    }
+    var size = -1
+    var sha = ""
+    out.split("\n").forEach(function (line) {
+      var m = line.match(/^SIZE:(\d+)$/)
+      if (m) size = parseInt(m[1], 10)
+      var h = line.match(/^([0-9a-f]{64})\s/)
+      if (h) sha = h[1]
+    })
+    var rec = (size >= 0 && sha !== "") ? Store.createAttachment(attachPendingName, size, sha) : null
+    // Stale sidecar on any failure (partial copy must never linger).
+    if (!rec) {
+      gcProcess.command = ["bash", "-c", "rm -f " + shellQuote(attachPendingDir + "/" + attachPendingId + "-" + attachPendingName)]
+      gcProcess.running = true
+      setAttachBusy(noteId, false)
+      setAttachMsg(noteId, exitCode === 0 ? "Couldn't stage that file." : "Attach failed — try again.")
+      return
+    }
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === noteId) {
+        if (!Array.isArray(localNotes[i].attachments)) localNotes[i].attachments = []
+        localNotes[i].attachments.push(rec)
+        touchLocalNotes()
+        break
+      }
+    }
+    setAttachBusy(noteId, false)
+    setAttachMsg(noteId, "")
+    persist()
+  }
+  // Remove sidecar dirs for a note (own bytes always, synced mirror only
+  // when asked — unsharing keeps local bytes, deleting drops both).
+  function removeAttachDirs(noteId, includeSync) {
+    var dirs = [ownAttachSubdir(noteId)]
+    if (includeSync && syncAttachSubdir(noteId) !== "") dirs.push(syncAttachSubdir(noteId))
+    gcProcess.command = ["bash", "-c", "rm -rf " + dirs.map(shellQuote).join(" ") + " 2>/dev/null; true"]
+    gcProcess.running = true
+  }
+  // Re-verify every peer attachment: present + hash match → ok, absent →
+  // waiting (still syncing), mismatch → bad. Runs after each peer fetch.
+  function refreshAttachmentStates() {
+    if (verifyProcess.running) return
+    var jobs = []
+    var seen = {}
+    allPeerNotes().forEach(function (n) {
+      if (!n) return
+      ;(n.attachments || []).forEach(function (a) {
+        var clean = Store.sanitizeAttachment(a)
+        if (!clean) return
+        var p = attPathFor(n, clean)
+        if (p === "") return
+        var key = n.id + "/" + clean.id
+        if (seen[key]) return
+        seen[key] = true
+        jobs.push({ key: key, path: p, sha: clean.sha256 })
+      })
+    })
+    if (jobs.length === 0) {
+      if (Object.keys(verifiedAtts).length > 0) verifiedAtts = ({})
+      return
+    }
+    var exp = {}
+    jobs.forEach(function (j) { exp[j.key] = j.sha })
+    verifyJobs = exp
+    var cmds = jobs.map(function (j) {
+      return "echo '===ATT:" + j.key + "==='; if test -f " + shellQuote(j.path)
+        + "; then printf 'HAVE '; sha256sum " + shellQuote(j.path) + " 2>/dev/null || echo READFAIL; else echo MISSING; fi"
+    })
+    verifyProcess.command = ["bash", "-c", cmds.join("\n")]
+    verifyProcess.running = true
+  }
+  function applyVerifyOutput(output) {
+    var next = {}
+    var idx = ""
+    var exp = verifyJobs
+    String(output || "").split("\n").forEach(function (line) {
+      var m = line.match(/^===ATT:(.*)===$/)
+      if (m) { idx = m[1]; return }
+      if (idx === "") return
+      if (line === "MISSING" || line === "READFAIL") next[idx] = "waiting"
+      else {
+        var h = line.match(/HAVE\s+([0-9a-f]{64})/)
+        next[idx] = (h && exp[idx] && h[1] === exp[idx].toLowerCase()) ? "ok" : "bad"
+      }
+    })
+    if (JSON.stringify(next) !== JSON.stringify(verifiedAtts)) verifiedAtts = next
+  }
   function copyNoteFull(note) {
     if (!note || !note.id) return
     copyRawText(Store.copyText(note), note.id)
@@ -322,8 +592,9 @@ Panel {
       var files = [notesPath, notesBakPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
       if (syncSnapshotPath !== "") files.push(syncSnapshotPath)
       secureProcess.command = ["bash", "-c",
-        "chmod 700 " + shellQuote(dataDir) + " 2>/dev/null; chmod 600 "
-        + files.map(shellQuote).join(" ") + " 2>/dev/null; true"]
+        "chmod 700 " + shellQuote(dataDir) + " " + shellQuote(localAttachDir) + " 2>/dev/null; chmod 600 "
+        + files.map(shellQuote).join(" ") + " 2>/dev/null; find " + shellQuote(localAttachDir)
+        + " -type f -exec chmod 600 {} + 2>/dev/null; true"]
       secureProcess.running = true
     }
   }
@@ -649,6 +920,7 @@ Panel {
   }
 
   function deleteNote(id) {
+    removeAttachDirs(id, true)
     localNotes = localNotes.filter(function (n) { return n && n.id !== id })
     if (selectedNoteId === id) selectedNoteId = ""
     persist()
@@ -658,6 +930,8 @@ Panel {
     for (var i = 0; i < localNotes.length; i++) {
       if (localNotes[i] && localNotes[i].id === id) {
         Store.setShared(localNotes[i], !(localNotes[i].shared === true), myId)
+        // Unsharing retracts the synced mirror (local bytes stay).
+        if (!(localNotes[i].shared === true)) removeAttachDirs(id, false)
         touchLocalNotes()
         break
       }
@@ -882,6 +1156,59 @@ Panel {
     }
   }
 
+  // Attachment stage+hash (stdout parsed by onAttachOutput).
+  Process {
+    id: attachProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.onAttachOutput(text, 0)
+    }
+    onExited: function (exitCode) {
+      // Empty stdout with failure (e.g. cp error) still needs feedback.
+      if (exitCode !== 0 && root.attachPendingNote !== "") root.onAttachOutput("", exitCode)
+    }
+  }
+
+  // Fire-and-forget sidecar cleanup.
+  Process {
+    id: gcProcess
+    running: false
+  }
+
+  // Peer attachment hash verification (stdout parsed by applyVerifyOutput).
+  Process {
+    id: verifyProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyVerifyOutput(text)
+    }
+  }
+
+  // Save one attachment to ~/Downloads (stdout parsed by onSaveOutput).
+  Process {
+    id: saveProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.onSaveOutput(text, 0)
+    }
+    onExited: function (exitCode) {
+      if (exitCode !== 0 && root.savePendingNote !== "") root.onSaveOutput("", exitCode)
+    }
+  }
+
+  // Explicit system-handler open (stdout parsed by onOpenOutput).
+  Process {
+    id: openProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.onOpenOutput(text)
+    }
+  }
+
   // Folder-sync setup writer: official `omarchy bar set` per key (separate
   // processes so rapid Save clicks can't overwrite each other's command).
   // The shell persists shell.json + pushes the new settings to us.
@@ -1081,6 +1408,7 @@ Panel {
     })
     if (JSON.stringify(next) !== JSON.stringify(peerSnapshots)) peerSnapshots = next
     rebuildPeerNotes()
+    refreshAttachmentStates()
   }
 
   Process {
@@ -1482,13 +1810,119 @@ Panel {
               wrapMode: Text.WrapAnywhere
             }
           }
+          // Attachments: kind rendering (image/text/file) with verified
+          // badges for peers, Save/Open actions, and the attach row on
+          // own notes. Bytes sync as sidecars; metadata rides the note.
+          Column {
+            width: parent.width
+            visible: root.cleanAttachments(note).length > 0
+            spacing: Style.space(4)
+            Repeater {
+              model: root.cleanAttachments(note)
+              delegate: Column {
+                required property var modelData
+                property var att: modelData
+                property string attKey: note.id + "/" + att.id
+                property string attPath: root.attPathFor(note, att)
+                property bool isOwn: note.author === root.myId
+                property string attState: isOwn ? "own" : (root.verifiedAtts[attKey] || "checking")
+                property string stateLabel: attState === "own" ? "on this machine"
+                  : attState === "ok" ? "verified ✓"
+                  : attState === "bad" ? "hash mismatch!"
+                  : attState === "waiting" ? "syncing…" : "checking…"
+                width: parent.width
+                spacing: Style.space(4)
+                Image {
+                  visible: att.kind === "image" && (isOwn || attState === "ok")
+                  width: parent.width
+                  height: Style.space(180)
+                  fillMode: Image.PreserveAspectFit
+                  asynchronous: true
+                  cache: false
+                  source: root.attUrl(attPath)
+                }
+                Text {
+                  visible: att.kind === "text" && root.attPeeks[attKey] !== undefined && root.attPeeks[attKey] !== ""
+                  width: parent.width
+                  text: root.peekLines(attKey)
+                  font.family: "monospace"
+                  font.pixelSize: Style.font.caption
+                  color: root.foreground
+                  wrapMode: Text.WrapAnywhere
+                }
+                // Peek loader for text attachments (single-file reads are
+                // reliable; watch picks up late-synced bytes).
+                FileView {
+                  path: att.kind === "text" ? attPath : ""
+                  watchChanges: true
+                  printErrors: false
+                  onLoaded: root.setAttPeek(attKey, text())
+                  onLoadFailed: root.setAttPeek(attKey, "")
+                  onFileChanged: reload()
+                }
+                RowLayout {
+                  width: parent.width
+                  spacing: Style.space(6)
+                  Text {
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: "📎 " + att.name + " (" + root.formatSize(att.size) + ") · " + stateLabel
+                    color: attState === "bad" ? Color.urgent : Qt.darker(root.foreground, 1.4)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    maximumLineCount: 1
+                    elide: Text.ElideRight
+                  }
+                  Button {
+                    text: "Save"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.saveAttachment(note, att)
+                  }
+                  Button {
+                    text: "Open"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.openAttachment(note, att)
+                  }
+                }
+              }
+            }
+          }
+          // Attach row on own notes: paste a path, staged + hashed locally.
+          RowLayout {
+            visible: note.author === root.myId
+            width: parent.width
+            spacing: Style.space(6)
+            TextField {
+              Layout.fillWidth: true
+              Layout.minimumWidth: 0
+              placeholderText: "Attach file path…"
+              foreground: root.foreground
+              text: root.attachPaths[note.id] || ""
+              onTextChanged: {
+                var m = {}
+                for (var k in root.attachPaths) m[k] = root.attachPaths[k]
+                m[note.id] = text
+                root.attachPaths = m
+              }
+              onAccepted: root.attachFile(note.id, text)
+            }
+            Button {
+              text: root.attachBusy[note.id] ? "…" : "Attach"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.attachFile(note.id, root.attachPaths[note.id] || "")
+            }
+          }
           Text {
             width: parent.width
-            visible: (note.attachments || []).length > 0
-            text: "📎 " + (note.attachments || []).length + " attachment(s) — preview coming soon"
+            visible: (root.attachMsg[note.id] || "") !== ""
+            text: root.attachMsg[note.id] || ""
             color: Qt.darker(root.foreground, 1.4)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
+            wrapMode: Text.WrapAnywhere
           }
           RowLayout {
             width: parent.width

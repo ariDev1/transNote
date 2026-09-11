@@ -70,6 +70,25 @@ it prepares the sync helper and creates your private key, which stays on
 your machine). The status line always tells you what is happening
 (`setting up…`, `on (2 friends)`, `couldn't reach friends — will retry`).
 
+## Attachments (folder sync)
+
+Attach files to your own notes: paste a path in the attach row, press
+**Attach**. Code fences (```` ``` ````) keep rendering as text blocks;
+*attached files* are the real files:
+
+- Bytes travel as sidecars in `<syncDir>/.attachments/` (synced like the
+  snapshots); the note itself carries only name, size, and SHA-256.
+- Max **25 MB** per file, rejected with a message.
+- Images show a thumbnail, text files a peek, everything a
+  **verified ✓** badge once the local re-hash matches (mismatch warns,
+  missing bytes read `syncing…` until they arrive).
+- **Save** copies to `~/Downloads` (never overwrites: `.1`, `.2`, …).
+  **Open** uses the system handler on explicit click only — executables
+  (risky extensions, `+x` bit) are save-only and refused with a notice.
+- Unsharing retracts the synced mirror; deleting drops both copies.
+- Internet-shared notes list attachments as folder-sync-only (metadata
+  travels, bytes don't).
+
 ## Safety notes
 
 - Your private key file (`~/.local/share/transnote/nostr_key`) is **secret**,
