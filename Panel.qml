@@ -14,8 +14,8 @@ import "Store.js" as Store
 // - Attachments: schema-reserved (`attachments: []`), UI placeholder only.
 Panel {
   id: root
-  moduleName: "rene.transnote"
-  ipcTarget: "rene.transnote"
+  moduleName: "ariDev1.transnote"
+  ipcTarget: "ariDev1.transnote"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -159,7 +159,7 @@ Panel {
     if (v === "") { setupMessage = "Give this machine a name first (e.g. laptop)."; return }
     setupSaving = true
     setupMessage = "Saving name…"
-    barSetDevice.command = [omarchyBin, "bar", "set", "rene.transnote", "deviceId", v]
+    barSetDevice.command = [omarchyBin, "bar", "set", "ariDev1.transnote", "deviceId", v]
     barSetDevice.running = true
   }
   function saveSetupDir() {
@@ -167,13 +167,13 @@ Panel {
     if (v === "") { setupMessage = "Enter a folder first (e.g. ~/transnote-lan)."; return }
     setupSaving = true
     setupMessage = "Saving folder…"
-    barSetDir.command = [omarchyBin, "bar", "set", "rene.transnote", "syncDir", v]
+    barSetDir.command = [omarchyBin, "bar", "set", "ariDev1.transnote", "syncDir", v]
     barSetDir.running = true
   }
   function saveSetupPeers() {
     setupSaving = true
     setupMessage = "Saving sharing list…"
-    barSetPeers.command = [omarchyBin, "bar", "set", "rene.transnote", "allowList", Store.normalizeText(setupPeers)]
+    barSetPeers.command = [omarchyBin, "bar", "set", "ariDev1.transnote", "allowList", Store.normalizeText(setupPeers)]
     barSetPeers.running = true
   }
   function createSetupFolder() {
@@ -1136,7 +1136,7 @@ Panel {
 
   // ---------------------------------------------------------------- IPC
   IpcHandler {
-    target: "rene.transnote"
+    target: "ariDev1.transnote"
     function open() { root.open() }
     function close() { root.close() }
     function show() { root.open() }

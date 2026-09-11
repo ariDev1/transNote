@@ -43,9 +43,9 @@ Internet notes show a 🌐 badge.
       **Check for peers now** button — the fastest way to see whether the
       other side's file even arrives.
    - Expert fallback: the same three values live in
-     `~/.config/omarchy/shell.json` in the `"id": "rene.transnote"` entry
+     `~/.config/omarchy/shell.json` in the `"id": "ariDev1.transnote"` entry
      (`deviceId`, `syncDir`, `allowList`) — or via
-     `omarchy bar set rene.transnote <key> <value>`. The Setup tab writes
+     `omarchy bar set ariDev1.transnote <key> <value>`. The Setup tab writes
      through that same official command.
 3. To share over the internet:
    - Copy **your code** in the panel (SHARE OVER INTERNET section) and send
@@ -82,8 +82,12 @@ your machine). The status line always tells you what is happening
 
 ## Install on another machine (friends & family)
 
-The `rene.` in the name is just the publisher name (like a brand) — the
+The `ariDev1.` in the name is just the publisher name (like a brand) — the
 plugin works under any username on any machine. Nothing is hardcoded.
+(Renamed from `rene.transnote` — if you still have the old id installed,
+remove it first: `omarchy plugin remove rene.transnote`, then add fresh
+as below and redo the 3 Setup fields. Notes, keys, and the sync folder
+are untouched by the reinstall.)
 
 The repo is private, so first give your friend access (GitHub → repo
 Settings → Collaborators → add them). Then on their machine:
@@ -108,7 +112,7 @@ omarchy restart shell
 When a new version is out, on each machine:
 
 ```bash
-omarchy plugin update rene.transnote
+omarchy plugin update ariDev1.transnote
 omarchy restart shell
 ```
 

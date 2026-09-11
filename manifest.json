@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "rene.transnote",
+  "id": "ariDev1.transnote",
   "name": "TransNote",
   "version": "0.3.5",
-  "author": "rene",
+  "author": "ariDev1",
   "description": "Fast shared text notes: write notes, share with friends, read and comment. Works locally, via shared folders, and over the internet (encrypted). No terminal needed.",
   "kinds": [
     "bar-widget"
