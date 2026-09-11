@@ -67,7 +67,8 @@ function createNote(title, body, author) {
     shared: false,
     comments: [],
     attachments: [],
-    color: ""
+    // A fresh random tint per note (cycle back to plain any time).
+    color: NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)]
   }
 }
 

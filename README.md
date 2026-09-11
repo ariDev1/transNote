@@ -62,9 +62,10 @@ Internet notes show a 🌐 badge.
    you open the panel. The panel grows with your notes and scrolls as one
    card when content exceeds the screen. Actions live as quiet icons in the
    title row (share, copy, delete — hover for tooltips); attaching hides
-   behind the 📎 toggle in the comment row. Notes take a translucent tint
-   from the palette button in the title row (or `t` on the keyboard) —
-   synced with the note, plain by default. Fenced code blocks
+   behind the 📎 toggle in the comment row. New notes arrive with a random
+   translucent tint; change it from the palette button in the title row
+   (or `t` on the keyboard, full circle back to plain) — synced with
+   the note. Fenced code blocks
    (```` ``` ````) render monospace with their language label and a
    per-block **Copy block** button — ideal for moving snippets between
    machines.
