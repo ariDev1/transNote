@@ -1109,13 +1109,29 @@ Panel {
     bar: root.bar
     open: root.opened
     contentWidth: panel.fittedContentWidth(Style.space(480))
-    contentHeight: panel.fittedContentHeight(Math.min(Style.space(600), column.implicitHeight))
+    // Responsive card: hugs content, grows with it up to the cap, and the
+    // shell clamps it to the actual screen (availableCardHeight) — so short
+    // screens never overflow and tall screens show more notes.
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(760))
+
+    // Whole-card scroll (stock pattern): the card hugs content up to the
+    // cap / screen edge, and anything taller scrolls here — footer included.
+    // The notes list below therefore never needs its own cap: it grows
+    // naturally and this Flickable is the single scroll region.
+    Flickable {
+      id: panelFlick
+      anchors.fill: parent
+      contentWidth: width
+      contentHeight: column.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      flickableDirection: Flickable.VerticalFlick
+      interactive: contentHeight > height
+      ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
     Column {
       id: column
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top
+      width: panelFlick.width
       spacing: Style.space(10)
 
       // ---- section tabs: only one view fits the card, pick one ----
@@ -1233,13 +1249,13 @@ Panel {
         font.pixelSize: Style.font.body
         wrapMode: Text.WrapAnywhere
       }
-      Item {
+        Item {
         width: parent.width
         visible: root.displayNotes.length > 0
-        // Hug the notes: one short note → small window, many notes → grow
-        // up to the cap, then scroll inside. (Width is fixed, so sizing the
-        // height from contentHeight cannot loop.)
-        height: visible ? Math.min(Style.space(300), Math.max(notesView.contentHeight, Style.space(60))) : 0
+        // Natural height: the outer card Flickable is the single scroll
+        // region, so the list never caps or clips mid-note here. (Width is
+        // fixed, so sizing the height from contentHeight cannot loop.)
+        height: visible ? Math.max(notesView.contentHeight, Style.space(120)) : 0
         clip: true
 
         ListView {
@@ -1249,6 +1265,10 @@ Panel {
           clip: true
           spacing: Style.space(6)
           boundsBehavior: Flickable.StopAtBounds
+          // Never scrolls itself (height always equals content): all
+          // dragging/wheel belongs to the outer card Flickable. Children
+          // (buttons, comment fields) still receive clicks normally.
+          interactive: false
 
             delegate: Column {
             required property var modelData
@@ -1699,6 +1719,7 @@ Panel {
         font.pixelSize: Style.font.caption
         wrapMode: Text.WrapAnywhere
       }
-    }
+    } // column
+    } // panelFlick
   }
 }
