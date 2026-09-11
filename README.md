@@ -60,7 +60,9 @@ Internet notes show a 🌐 badge.
    its title + body on the clipboard (no fiddly text selection needed).
    Fresh arrivals show a **• new** pill and a dot on the bar icon until
    you open the panel. The panel grows with your notes and scrolls as one
-   card when content exceeds the screen. Fenced code blocks
+   card when content exceeds the screen. Actions live as quiet icons in the
+   title row (share, copy, delete — hover for tooltips); attaching hides
+   behind the 📎 toggle in the comment row. Fenced code blocks
    (```` ``` ````) render monospace with their language label and a
    per-block **Copy block** button — ideal for moving snippets between
    machines.

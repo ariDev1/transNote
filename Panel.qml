@@ -123,11 +123,12 @@ Panel {
     var d = syncAttachDir()
     return d === "" ? "" : d + "/" + noteId
   }
-  // Byte location for one attachment: own notes live locally, peers' notes
-  // in the synced dot-dir. "" when unresolvable (should not happen).
+  // Byte location for one attachment: notes in the local file live
+  // locally, everything else in the synced dot-dir. Membership (not the
+  // author string) decides, so renamed-device notes keep working.
   function attPathFor(note, att) {
     if (!note || !att) return ""
-    var base = (note.author === myId) ? ownAttachSubdir(note.id) : syncAttachSubdir(note.id)
+    var base = isLocalNote(note.id) ? ownAttachSubdir(note.id) : syncAttachSubdir(note.id)
     if (base === "") return ""
     return base + "/" + att.id + "-" + att.name
   }
@@ -1118,6 +1119,22 @@ Panel {
     // Reassign so QML bindings update for in-place mutations.
     localNotes = localNotes.slice()
   }
+  function isLocalNote(id) {
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === id) return true
+    }
+    return false
+  }
+  // Per-note attach-row toggle (paperclip in the comment row). Closed by
+  // default: the quiet UI shows one action row per note, details on demand.
+  property var attachOpen: ({})
+  function toggleAttachRow(noteId) {
+    var m = {}
+    for (var k in attachOpen) m[k] = attachOpen[k]
+    if (m[noteId]) delete m[noteId]
+    else m[noteId] = true
+    attachOpen = m
+  }
 
   function addComment(noteId) {
     var draft = Store.normalizeText(commentDrafts[noteId])
@@ -1925,6 +1942,33 @@ Panel {
               font.pixelSize: Style.font.caption
               maximumLineCount: 1
             }
+            // Quiet actions: icon-only, tooltips on hover. Share stays
+            // author-gated (only the author publishes); Delete covers all
+            // local notes so renames never trap them again.
+            Button {
+              visible: note.author === root.myId
+              iconText: String.fromCodePoint(0xF0474)
+              tooltipText: note.shared === true ? "Unshare" : "Share"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              selected: note.shared === true
+              onClicked: root.toggleShare(note.id)
+            }
+            Button {
+              iconText: root.copiedNoteId === note.id ? String.fromCodePoint(0xF012C) : String.fromCodePoint(0xF018F)
+              tooltipText: root.copyFailedId === note.id ? "Copy failed" : (root.copiedNoteId === note.id ? "Copied!" : "Copy note")
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.copyNoteFull(note)
+            }
+            Button {
+              visible: root.isLocalNote(note.id)
+              iconText: String.fromCodePoint(0xF0194)
+              tooltipText: "Delete"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.deleteNote(note.id)
+            }
           }
           // Body renders as segments: prose as usual, ```fenced code blocks
           // monospace + no-wrap in a horizontal scroller with language label
@@ -1975,7 +2019,8 @@ Panel {
                     }
                     Button {
                       property string blockKey: modelData.key || note.id
-                      text: root.copyFailedId === blockKey ? "Failed" : (root.copiedNoteId === blockKey ? "Copied!" : "Copy block")
+                      iconText: root.copiedNoteId === blockKey ? String.fromCodePoint(0xF012C) : String.fromCodePoint(0xF018F)
+                      tooltipText: root.copyFailedId === blockKey ? "Copy failed" : (root.copiedNoteId === blockKey ? "Copied!" : "Copy code block")
                       foreground: root.foreground
                       fontFamily: root.fontFamily
                       onClicked: root.copyRawText(modelData.content, blockKey)
@@ -2034,7 +2079,7 @@ Panel {
                 property var att: modelData
                 property string attKey: note.id + "/" + att.id
                 property string attPath: root.attPathFor(note, att)
-                property bool isOwn: note.author === root.myId
+                property bool isOwn: root.isLocalNote(note.id)
                 property string attState: isOwn ? "own" : (root.verifiedAtts[attKey] || "checking")
                 property string stateLabel: attState === "own" ? "on this machine"
                   : attState === "ok" ? "verified ✓"
@@ -2084,20 +2129,23 @@ Panel {
                     elide: Text.ElideRight
                   }
                   Button {
-                    text: "Save"
+                    iconText: String.fromCodePoint(0xF01DA)
+                    tooltipText: "Save to Downloads"
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: root.saveAttachment(note, att)
                   }
                   Button {
-                    text: "Open"
+                    iconText: String.fromCodePoint(0xF02FA)
+                    tooltipText: "Open"
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: root.openAttachment(note, att)
                   }
                   Button {
                     visible: isOwn
-                    text: "Remove"
+                    text: "×"
+                    tooltipText: "Remove attachment"
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: root.removeAttachment(note.id, att.id)
@@ -2106,10 +2154,11 @@ Panel {
               }
             }
           }
-          // Attach row on own notes: paste a path, staged + hashed locally.
+          // Attach row on own notes, behind the 📎 toggle: paste a path,
+          // staged + hashed locally.
           // Path completion included (Tab completes, click accepts).
           RowLayout {
-            visible: note.author === root.myId
+            visible: root.isLocalNote(note.id) && !!root.attachOpen[note.id]
             width: parent.width
             spacing: Style.space(6)
             TextField {
@@ -2186,28 +2235,15 @@ Panel {
               }
               onAccepted: root.addComment(note.id)
             }
+            // Attach toggle (own notes keep it quiet until needed).
             Button {
-              text: root.copyFailedId === note.id ? "Failed" : (root.copiedNoteId === note.id ? "Copied!" : "Copy")
+              visible: root.isLocalNote(note.id)
+              text: "📎"
+              tooltipText: root.attachOpen[note.id] ? "Hide attach row" : "Attach a file"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: root.copyNoteFull(note)
-            }
-            Button {
-              visible: note.author === root.myId
-              text: note.shared === true ? "Shared" : "Share"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              selected: note.shared === true
-              onClicked: root.toggleShare(note.id)
-            }
-            // Delete is always available: everything in the local file was
-            // created on this machine, so there is no foreign note to
-            // protect. (Share stays author-gated: only the author publishes.)
-            Button {
-              text: "Delete"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: root.deleteNote(note.id)
+              selected: !!root.attachOpen[note.id]
+              onClicked: root.toggleAttachRow(note.id)
             }
           }
             PanelSeparator { foreground: root.foreground; width: parent.width }
