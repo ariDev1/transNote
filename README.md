@@ -21,12 +21,31 @@ Internet notes show a 🌐 badge.
 ## Use it
 
 1. Open TransNote in the bar and write a note. Press **Share** on it.
-2. To share over the internet:
+2. To share on your local network (folder sync, works offline) — no terminal needed:
+   - Open TransNote in the bar → **Setup** tab.
+   - **1 — Name this machine** (e.g. `laptop`), press **Save**.
+   - **2 — Shared folder**: enter `~/transnote-lan`, press **Create folder**,
+     then **Save folder**. Sync that folder between the machines with
+     Syncthing (recommended), Dropbox, or for a quick test with SSH:
+     `sshfs <user>@<other-ip>:/home/<user>/transnote-lan ~/transnote-lan`
+   - **3 — Who can read**: enter every machine name, comma-separated
+     (e.g. `laptop,desktop`), press **Save**.
+   - Repeat on the other machine (other name, same folder, same list).
+   - Check the footer: `Local only — set syncDir to share` means step 2 is
+     still open. `Sync on: ~/transnote-lan` means folder sync is active.
+     After pressing **Share** on a note, your `<deviceId>.json` appears in
+     the folder and shows up on the peer within ~15 seconds.
+   - Expert fallback: the same three values live in
+     `~/.config/omarchy/shell.json` in the `"id": "rene.transnote"` entry
+     (`deviceId`, `syncDir`, `allowList`) — or via
+     `omarchy bar set rene.transnote <key> <value>`. The Setup tab writes
+     through that same official command.
+3. To share over the internet:
    - Copy **your code** in the panel (SHARE OVER INTERNET section) and send
      it to a friend — message, email, anything.
    - Paste the code your friend sends back under **Add a friend**, give them
      a name, press **Add friend**.
-3. That's it. Shared notes sync by themselves about once a minute
+4. That's it. Shared notes sync by themselves about once a minute
    (or press **Sync now**). Your friend's notes appear marked with 🌐,
    and you can comment on them.
 

@@ -89,6 +89,77 @@ Panel {
   // Visible section of the panel (the card is capped at 520px with no
   // scrolling, so Notes and Share take turns instead of stacking).
   property string panelView: "notes"
+  // Folder-sync setup wizard (no terminal): drafts for the three widget
+  // settings. Saved through the official `omarchy bar set` writer, so the
+  // shell persists + hot-reloads them safely — the panel never edits
+  // shell.json itself.
+  property string setupDevice: ""
+  property string setupDir: ""
+  property string setupPeers: ""
+  property string setupMessage: ""
+  property bool setupSaving: false
+  readonly property string omarchyBin: (Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy") + "/bin/omarchy"
+  function openSetup() {
+    setupDevice = myId
+    setupDir = Store.normalizeText(syncDirSetting) !== "" ? Store.normalizeText(syncDirSetting) : "~/transnote-lan"
+    setupPeers = Store.normalizeText(allowListSetting)
+    if (setupDeviceField) setupDeviceField.text = setupDevice
+    if (setupDirField) setupDirField.text = setupDir
+    if (setupPeersField) setupPeersField.text = setupPeers
+    setupMessage = ""
+    panelView = "setup"
+    checkSetupFolder()
+  }
+  function expandSetupDir(path) {
+    var d = Store.normalizeText(path)
+    if (d === "") return ""
+    if (d[0] === "~") return (home || "") + d.slice(1)
+    return d
+  }
+  function saveSetupDevice() {
+    var v = Store.normalizeText(setupDevice)
+    if (v === "") { setupMessage = "Give this machine a name first (e.g. laptop)."; return }
+    setupSaving = true
+    setupMessage = "Saving name…"
+    barSetDevice.command = [omarchyBin, "bar", "set", "rene.transnote", "deviceId", v]
+    barSetDevice.running = true
+  }
+  function saveSetupDir() {
+    var v = Store.normalizeText(setupDir)
+    if (v === "") { setupMessage = "Enter a folder first (e.g. ~/transnote-lan)."; return }
+    setupSaving = true
+    setupMessage = "Saving folder…"
+    barSetDir.command = [omarchyBin, "bar", "set", "rene.transnote", "syncDir", v]
+    barSetDir.running = true
+  }
+  function saveSetupPeers() {
+    setupSaving = true
+    setupMessage = "Saving sharing list…"
+    barSetPeers.command = [omarchyBin, "bar", "set", "rene.transnote", "allowList", Store.normalizeText(setupPeers)]
+    barSetPeers.running = true
+  }
+  function createSetupFolder() {
+    var dir = expandSetupDir(setupDir)
+    if (dir === "") { setupMessage = "Enter a folder first (e.g. ~/transnote-lan)."; return }
+    setupMessage = "Creating folder…"
+    folderCreate.command = ["mkdir", "-p", dir]
+    folderCreate.running = true
+  }
+  function checkSetupFolder() {
+    var dir = expandSetupDir(setupDir)
+    if (dir === "") return
+    folderCheck.command = ["bash", "-c", "test -d " + shellQuote(dir) + " && test -w " + shellQuote(dir)]
+    folderCheck.running = true
+  }
+  function onBarSetDone(key, exitCode) {
+    setupSaving = false
+    if (exitCode === 0) {
+      if (key === "folder") checkSetupFolder()
+      setupMessage = "Saved — the bar picks it up by itself."
+    } else {
+      setupMessage = "Couldn't save — try again."
+    }
+  }
   readonly property var nostrAllowList: {
     var base = (allowList || []).slice()
     ;(friends || []).forEach(function (f) { if (f && f.hex) base.push(f.hex) })
@@ -667,6 +738,48 @@ Panel {
     }
   }
 
+  // Folder-sync setup writer: official `omarchy bar set` per key (separate
+  // processes so rapid Save clicks can't overwrite each other's command).
+  // The shell persists shell.json + pushes the new settings to us.
+  Process {
+    id: barSetDevice
+    running: false
+    onExited: function (exitCode) { root.onBarSetDone("device", exitCode) }
+  }
+
+  Process {
+    id: barSetDir
+    running: false
+    onExited: function (exitCode) { root.onBarSetDone("folder", exitCode) }
+  }
+
+  Process {
+    id: barSetPeers
+    running: false
+    onExited: function (exitCode) { root.onBarSetDone("peers", exitCode) }
+  }
+
+  Process {
+    id: folderCreate
+    running: false
+    onExited: function (exitCode) {
+      if (exitCode === 0) { root.setupMessage = "Folder ready — press Save folder."; root.checkSetupFolder() }
+      else root.setupMessage = "Couldn't create that folder — check the path."
+    }
+  }
+
+  Process {
+    id: folderCheck
+    running: false
+    onExited: function (exitCode) {
+      if (root.panelView !== "setup" || root.setupSaving) return
+      if (root.setupMessage === "Saving name…" || root.setupMessage === "Saving folder…" || root.setupMessage === "Saving sharing list…" || root.setupMessage === "Creating folder…") return
+      var dir = root.expandSetupDir(root.setupDir)
+      if (dir === "") return
+      root.setupMessage = exitCode === 0 ? "Folder looks good." : "Folder not found — press Create folder, then Save folder."
+    }
+  }
+
   Process {
     id: npubConvert
     running: false
@@ -894,6 +1007,15 @@ Panel {
           selected: root.panelView === "share"
           onClicked: root.panelView = "share"
         }
+        Button {
+          Layout.fillWidth: true
+          text: "Setup"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          selected: root.panelView === "setup"
+          onClicked: root.openSetup()
+        }
       }
 
       Column {
@@ -908,6 +1030,16 @@ Panel {
         foreground: root.foreground
         fontFamily: root.fontFamily
         width: parent.width
+      }
+
+      Button {
+        visible: !root.syncConfigured
+        width: parent.width
+        text: "Not sharing yet — open Setup…"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        bordered: true
+        onClicked: root.openSetup()
       }
 
       // ---- new note ----
@@ -1237,6 +1369,142 @@ Panel {
         onClicked: root.runSyncCycle()
       }
       } // shareSection column
+
+      Column {
+        id: setupSection
+        width: parent.width
+        spacing: Style.space(10)
+        visible: root.panelView === "setup"
+        height: visible ? implicitHeight : 0
+
+      PanelSectionHeader {
+        text: "SETUP — SHARE ON YOUR NETWORK"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        width: parent.width
+      }
+      Text {
+        width: parent.width
+        visible: !root.syncConfigured
+        text: "Not sharing yet — three quick steps below, no terminal needed."
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
+        text: "1 — Name this machine (becomes <name>.json in the folder):"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WrapAnywhere
+      }
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(6)
+        TextField {
+          id: setupDeviceField
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          placeholderText: "e.g. laptop…"
+          foreground: root.foreground
+          text: root.setupDevice
+          onTextChanged: root.setupDevice = text
+          onAccepted: root.saveSetupDevice()
+        }
+        Button {
+          text: "Save"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.saveSetupDevice()
+        }
+      }
+      Text {
+        width: parent.width
+        text: "2 — Shared folder (same folder, synced between machines with Syncthing/Dropbox):"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WrapAnywhere
+      }
+      TextField {
+        id: setupDirField
+        width: parent.width
+        placeholderText: "~/transnote-lan…"
+        foreground: root.foreground
+        text: root.setupDir
+        onTextChanged: { root.setupDir = text; root.checkSetupFolder() }
+        onAccepted: root.saveSetupDir()
+      }
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(6)
+        Button {
+          Layout.fillWidth: true
+          text: "Create folder"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.createSetupFolder()
+        }
+        Button {
+          Layout.fillWidth: true
+          text: "Save folder"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.saveSetupDir()
+        }
+      }
+      Text {
+        width: parent.width
+        text: "3 — Who can read your shared notes (comma-separated machine names):"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WrapAnywhere
+      }
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(6)
+        TextField {
+          id: setupPeersField
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          placeholderText: "e.g. laptop,desktop…"
+          foreground: root.foreground
+          text: root.setupPeers
+          onTextChanged: root.setupPeers = text
+          onAccepted: root.saveSetupPeers()
+        }
+        Button {
+          text: "Save"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.saveSetupPeers()
+        }
+      }
+      Text {
+        width: parent.width
+        visible: root.setupMessage !== ""
+        text: root.setupMessage
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
+        text: "Then: sync this folder to your other machine, repeat these 3 steps there (other name, same folder, same list), and press Share on a note."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+      }
+      } // setupSection column
 
       PanelSeparator { foreground: root.foreground; width: parent.width }
 
