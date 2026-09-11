@@ -98,6 +98,10 @@ Panel {
   property string setupPeers: ""
   property string setupMessage: ""
   property bool setupSaving: false
+  // Last folder-merge outcome, shown in Setup so a missing peer note can be
+  // located without log access: files seen → notes parsed → notes kept →
+  // notes displayed. Updated by rebuildPeerNotes() on every peer load.
+  property string peerDebug: ""
   readonly property string omarchyBin: (Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy") + "/bin/omarchy"
   // Authors of my existing local notes that differ from the drafted device
   // name. Renaming orphans them: Share/Delete buttons hide (they check
@@ -348,9 +352,11 @@ Panel {
     if (JSON.stringify(pruned) !== JSON.stringify(outbox)) {
       outbox = pruned
       persist()
+      peerDebug = "files=" + peerFiles.length + " snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length + " (pruned, reloading)"
       return
     }
     refreshDisplay()
+    peerDebug = "files=" + peerFiles.length + " snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length
   }
 
   // Internet fetch output (written by the built-in sync, read back here).
@@ -1562,6 +1568,15 @@ Panel {
         fontFamily: root.fontFamily
         bordered: true
         onClicked: root.rescanPeers()
+      }
+      Text {
+        width: parent.width
+        visible: root.peerDebug !== ""
+        text: "Diagnostics: " + root.peerDebug
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
       }
       } // setupSection column
 
