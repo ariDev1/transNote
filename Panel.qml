@@ -1522,8 +1522,10 @@ Panel {
               selected: note.shared === true
               onClicked: root.toggleShare(note.id)
             }
+            // Delete is always available: everything in the local file was
+            // created on this machine, so there is no foreign note to
+            // protect. (Share stays author-gated: only the author publishes.)
             Button {
-              visible: note.author === root.myId
               text: "Delete"
               foreground: root.foreground
               fontFamily: root.fontFamily
