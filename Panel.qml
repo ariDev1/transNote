@@ -99,6 +99,20 @@ Panel {
   property string setupMessage: ""
   property bool setupSaving: false
   readonly property string omarchyBin: (Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy") + "/bin/omarchy"
+  // Authors of my existing local notes that differ from the drafted device
+  // name. Renaming orphans them: Share/Delete buttons hide (they check
+  // note.author === myId) and peers must allow-list the OLD name, since
+  // qualification matches note authors, not snapshot file names.
+  readonly property var setupForeignAuthors: {
+    var seen = {}
+    var out = []
+    var want = Store.normalizeText(root.setupDevice)
+    ;(localNotes || []).forEach(function (n) {
+      var a = Store.normalizeText(n && n.author)
+      if (a !== "" && a !== want && !seen[a]) { seen[a] = true; out.push(a) }
+    })
+    return out
+  }
   function openSetup() {
     setupDevice = myId
     setupDir = Store.normalizeText(syncDirSetting) !== "" ? Store.normalizeText(syncDirSetting) : "~/transnote-lan"
@@ -197,6 +211,10 @@ Panel {
   property string newBody: ""
   property var commentDrafts: ({})
   property var peerFiles: []
+  // True once the local notes file has been read (or confirmed missing).
+  // Guards persist-on-config-change so a settings update arriving before
+  // the first load can never clobber notes.json with an empty array.
+  property bool localLoaded: false
 
   function refreshDisplay() {
     var union = (localNotes || []).concat(peerNotes || []).concat(nostrPeerNotes || [])
@@ -277,6 +295,7 @@ Panel {
     } catch (e) { console.warn("transnote", "Ignoring bad notes file", e) }
     localNotes = notes
     outbox = box
+    localLoaded = true
     mergePeers()
   }
 
@@ -641,7 +660,7 @@ Panel {
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadLocal(text())
-    onLoadFailed: { root.localNotes = []; root.refreshDisplay() }
+    onLoadFailed: { root.localNotes = []; root.localLoaded = true; root.refreshDisplay() }
     onFileChanged: reload()
   }
 
@@ -939,7 +958,15 @@ Panel {
   onFriendsChanged: { root.refilterNostr(); root.updateNetStatus() }
 
   onSyncConfiguredChanged: {
-    if (syncConfigured) { syncStatus = "Sync on: " + syncDir; rescanPeers() }
+    if (syncConfigured) {
+      syncStatus = "Sync on: " + syncDir
+      rescanPeers()
+      // The snapshot is only written by persist() (note actions). Without
+      // this, configuring syncDir via Setup leaves an empty folder until
+      // the user happens to edit a note. Guarded by localLoaded so a
+      // settings update can never wipe notes.json before first load.
+      if (localLoaded) persist()
+    }
     else { syncStatus = "Local only — set syncDir to share"; peerFiles = [] }
   }
 
@@ -1420,6 +1447,15 @@ Panel {
           bordered: true
           onClicked: root.saveSetupDevice()
         }
+      }
+      Text {
+        width: parent.width
+        visible: root.setupForeignAuthors.length > 0
+        text: "Heads up: your existing notes are signed as '" + root.setupForeignAuthors.join(", ") + "'. Renaming hides their Share/Delete buttons, and friends must allow the old name. Prefer keeping the name."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
       }
       Text {
         width: parent.width
