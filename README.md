@@ -30,11 +30,18 @@ Internet notes show a 🌐 badge.
      `sshfs <user>@<other-ip>:/home/<user>/transnote-lan ~/transnote-lan`
    - **3 — Who can read**: enter every machine name, comma-separated
      (e.g. `laptop,desktop`), press **Save**.
-   - Repeat on the other machine (other name, same folder, same list).
-   - Check the footer: `Local only — set syncDir to share` means step 2 is
-     still open. `Sync on: ~/transnote-lan` means folder sync is active.
-     After pressing **Share** on a note, your `<deviceId>.json` appears in
-     the folder and shows up on the peer within ~15 seconds.
+    - Repeat on the other machine (other name, same folder, same list).
+      Keep names stable afterwards: notes are signed with the name active
+      when created — renaming hides their Share/Delete buttons and forces
+      everyone to allow-list the old name too (the Setup tab warns you).
+    - Check the footer: `Local only — set syncDir to share` means step 2 is
+      still open. `Sync on: ~/transnote-lan` means folder sync is active.
+      After pressing **Share** on a note, your `<deviceId>.json` appears in
+      the folder and shows up on the peer within ~15 seconds.
+    - Setup also reports **Peer files seen here (N)** plus a **Diagnostics**
+      line (`files=… fetched=… snapNotes=… peerNotes=… shown=…`) and a
+      **Check for peers now** button — the fastest way to see whether the
+      other side's file even arrives.
    - Expert fallback: the same three values live in
      `~/.config/omarchy/shell.json` in the `"id": "rene.transnote"` entry
      (`deviceId`, `syncDir`, `allowList`) — or via
@@ -47,7 +54,8 @@ Internet notes show a 🌐 badge.
      a name, press **Add friend**.
 4. That's it. Shared notes sync by themselves about once a minute
    (or press **Sync now**). Your friend's notes appear marked with 🌐,
-   and you can comment on them.
+   and you can comment on them. Every note has a **Copy** button that puts
+   its title + body on the clipboard (no fiddly text selection needed).
 
 The first time, the panel sets everything up by itself (about a minute:
 it prepares the sync helper and creates your private key, which stays on
@@ -102,6 +110,30 @@ omarchy restart shell
 ```
 
 Check you're current: the panel footer ends with `· vX.Y.Z`.
+
+## If shared notes don't appear
+
+Work down this list — it covers every failure seen in real LAN testing:
+
+1. **Are the folders actually linked?** Setup only creates a *local* folder.
+   Prove the link past TransNote: `touch ~/transnote-lan/link-test.txt`
+   on machine A — it must appear on machine B within a minute, and vice
+   versa. If not, fix Syncthing/sshfs first (folder shared + accepted on
+   both sides, status Up to Date). Nothing else matters until this works.
+2. **Did the peer write its snapshot?** Its `<deviceId>.json` must exist in
+   the folder with your note inside (`shared: true`). Saving Setup writes
+   it immediately on current versions — on old versions, toggle **Share**
+   off/on (or add a comment) to force the write. Both machines must run
+   the same version (compare footers).
+3. **Is the note Shared?** Only ◉ notes publish; ○ notes never leave the
+   machine. Press **Share** on it.
+4. **Does each allow-list name the other's author?** Matching is against
+   note *authors* (the machine name active when the note was created),
+   not file names. `Sharing with: …` in the footer shows your effective
+   list.
+5. **Wait ~15 seconds** (folder poll cadence), then check Setup's
+   **Diagnostics** line: `files=` (scan) → `fetched=`/`snapNotes=`
+   (read) → `peerNotes=` (merge) → `shown=` (display) pinpoints the stage.
 
 ## Files (for the curious)
 

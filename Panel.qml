@@ -86,6 +86,21 @@ Panel {
   property string friendError: ""
   property string copyNote: ""
   property bool wlCopyOk: false
+  // Per-note clipboard copy: Copy button stages title+body to a file, then
+  // wl-copy reads it (argv-safe for any text — no shell interpolation of
+  // the note itself). Button shows Copied!/Failed per note.
+  property string pendingCopyNoteId: ""
+  property string copiedNoteId: ""
+  property string copyFailedId: ""
+  readonly property string clipboardStagingPath: dataDir + "/clipboard.txt"
+  function copyNoteFull(note) {
+    if (!note || !note.id) return
+    pendingCopyNoteId = note.id
+    copiedNoteId = ""
+    copyFailedId = ""
+    clipboardFile.setText(Store.copyText(note))
+    copyDelay.restart()
+  }
   // Visible section of the panel (the card is capped at 520px with no
   // scrolling, so Notes and Share take turns instead of stacking).
   property string panelView: "notes"
@@ -259,7 +274,7 @@ Panel {
   // (The sync folder itself must also stay non-shared — see README.)
   function secureFiles() {
     if (!secureProcess.running) {
-      var files = [notesPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath]
+      var files = [notesPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
       if (syncSnapshotPath !== "") files.push(syncSnapshotPath)
       secureProcess.command = ["bash", "-c",
         "chmod 700 " + shellQuote(dataDir) + " 2>/dev/null; chmod 600 "
@@ -779,6 +794,35 @@ Panel {
     }
   }
 
+  // Clipboard staging file for note copy (written, then wl-copy reads it).
+  FileView {
+    id: clipboardFile
+    path: root.clipboardStagingPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+  }
+
+  // Short pause so the staging file is on disk before wl-copy reads it.
+  Timer {
+    id: copyDelay
+    interval: 600
+    repeat: false
+    onTriggered: {
+      noteCopyProcess.command = ["bash", "-c", "wl-copy < " + shellQuote(clipboardStagingPath)]
+      noteCopyProcess.running = true
+    }
+  }
+
+  Process {
+    id: noteCopyProcess
+    running: false
+    onExited: function (exitCode) {
+      if (exitCode === 0) { root.copiedNoteId = root.pendingCopyNoteId; root.copyFailedId = "" }
+      else { root.copyFailedId = root.pendingCopyNoteId; root.copiedNoteId = "" }
+    }
+  }
+
   // Folder-sync setup writer: official `omarchy bar set` per key (separate
   // processes so rapid Save clicks can't overwrite each other's command).
   // The shell persists shell.json + pushes the new settings to us.
@@ -1294,6 +1338,12 @@ Panel {
                 root.commentDrafts = drafts
               }
               onAccepted: root.addComment(note.id)
+            }
+            Button {
+              text: root.copyFailedId === note.id ? "Failed" : (root.copiedNoteId === note.id ? "Copied!" : "Copy")
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.copyNoteFull(note)
             }
             Button {
               visible: note.author === root.myId

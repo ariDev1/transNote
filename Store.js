@@ -298,6 +298,14 @@ function previewBody(body, maxLines, maxChars) {
   }
   return { text: text, truncated: cutByLines || cutByChars }
 }
+// Plain-text rendering of a note for clipboard copy (title + body).
+function copyText(note) {
+  if (!note || typeof note !== "object") return ""
+  var title = normalizeText(note.title)
+  var body = String(note.body === undefined || note.body === null ? "" : note.body).replace(/\r\n/g, "\n")
+  if (title !== "" && body !== "") return title + "\n\n" + body
+  return title !== "" ? title : body
+}
 // Friends file (managed in the panel UI, no terminal needed):
 // { version: 1, friends: [{ hex, name }] }. Accepts the raw file text,
 // the parsed object, or an already-clean array (idempotent).
@@ -414,6 +422,7 @@ if (typeof module !== "undefined") {
     mergeForeignComments: mergeForeignComments,
     pruneOutbox: pruneOutbox,
     previewBody: previewBody,
+    copyText: copyText,
     hexRecipients: hexRecipients,
     sanitizeFriends: sanitizeFriends,
     effectiveNostrAllow: effectiveNostrAllow,
