@@ -212,6 +212,41 @@ Panel {
   property var foreignComments: ({})
   property string syncStatus: ""
   property string selectedNoteId: ""
+  // Unread tracking for the subtle new-note effect. The list model is
+  // rebuilt wholesale on every sync (so per-item entrance animations would
+  // replay constantly) — instead: the bar icon tints while anything is
+  // unread, and fresh notes carry a small "• new" pill until the panel is
+  // opened. First build only primes the known set (no unread after restart).
+  property var knownNoteIds: ({})
+  property var unreadIds: ({})
+  property bool notesPrimed: false
+  readonly property bool hasUnread: Object.keys(unreadIds).length > 0
+  function trackFreshness() {
+    var seen = {}
+    ;(displayNotes || []).forEach(function (n) { if (n && n.id) seen[n.id] = true })
+    if (!notesPrimed) {
+      knownNoteIds = seen
+      notesPrimed = true
+      return
+    }
+    var unread = {}
+    for (var k in unreadIds) unread[k] = unreadIds[k]
+    var changed = false
+    // Own notes are never "new" — only arrivals from others.
+    ;(displayNotes || []).forEach(function (n) {
+      if (!n || !n.id) return
+      if (n.author === myId || (myHex !== "" && n.author === myHex)) return
+      if (!knownNoteIds[n.id] && !unread[n.id]) { unread[n.id] = true; changed = true }
+    })
+    Object.keys(unread).forEach(function (id) {
+      if (!seen[id]) { delete unread[id]; changed = true }
+    })
+    knownNoteIds = seen
+    if (changed) unreadIds = unread
+  }
+  function markAllRead() {
+    if (Object.keys(unreadIds).length > 0) unreadIds = ({})
+  }
   // Notes expanded to full body text (map noteId -> true). Collapsed notes
   // show a short preview so one long note never takes over the list.
   property var expandedNotes: ({})
@@ -238,6 +273,7 @@ Panel {
   function refreshDisplay() {
     var union = (localNotes || []).concat(peerNotes || []).concat(nostrPeerNotes || [])
     displayNotes = Store.sortNotes(union.filter(function (n) { return !!n }))
+    trackFreshness()
   }
 
   function allPeerNotes() {
@@ -1057,6 +1093,7 @@ Panel {
   }
 
   onAllowListChanged: { root.refilterNostr(); root.updateNetStatus() }
+  onOpenedChanged: { if (opened) root.markAllRead() }
   onMyHexChanged: { root.refilterNostr(); root.updateNetStatus() }
   onFriendsChanged: { root.refilterNostr(); root.updateNetStatus() }
 
@@ -1099,6 +1136,21 @@ Panel {
       if (root.opened) root.close()
       else root.open()
     }
+  }
+
+  // Subtle unread signal: a small dot in the icon corner while fresh notes
+  // wait (cleared on open). The icon glyph itself stays untouched.
+  Rectangle {
+    visible: root.hasUnread
+    width: Style.space(8)
+    height: Style.space(8)
+    radius: Style.space(8) / 2
+    color: bar ? bar.urgent : Color.urgent
+    anchors.right: button.right
+    anchors.top: button.top
+    anchors.rightMargin: Style.space(2)
+    anchors.topMargin: Style.space(2)
+    z: 10
   }
 
   // -------------------------------------------------------------- panel
@@ -1301,6 +1353,14 @@ Panel {
               font.pixelSize: Style.font.caption
               maximumLineCount: 1
               elide: Text.ElideRight
+            }
+            Text {
+              visible: !!root.unreadIds[note.id]
+              text: "• new"
+              color: Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              maximumLineCount: 1
             }
           }
           Text {
