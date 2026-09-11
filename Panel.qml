@@ -331,17 +331,13 @@ Panel {
   function rebuildPeerNotes() {
     var all = []
     var pairs = []
-    var states = []
-    for (var i = 0; i < peerInstantiator.count; i++) {
-      var obj = peerInstantiator.objectAt(i)
-      if (obj && obj.snapshot) {
-        all = all.concat(obj.snapshot.notes)
-        pairs = pairs.concat(obj.snapshot.pairs)
-        states.push(obj.loadState || "?")
-      } else {
-        states.push("no-obj")
+    Object.keys(peerSnapshots).forEach(function (k) {
+      var s = peerSnapshots[k]
+      if (s) {
+        all = all.concat(s.notes || [])
+        pairs = pairs.concat(s.pairs || [])
       }
-    }
+    })
     // De-duplicate by note id, newest first; drop notes I authored (mine win).
     var mine = {}
     localNotes.forEach(function (n) { if (n) mine[n.id] = true })
@@ -356,11 +352,11 @@ Panel {
     if (JSON.stringify(pruned) !== JSON.stringify(outbox)) {
       outbox = pruned
       persist()
-      peerDebug = "files=" + peerFiles.length + " delegates=" + peerInstantiator.count + " [" + states.join(",") + "] snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length + " (pruned, reloading)"
+      peerDebug = "files=" + peerFiles.length + " fetched=" + Object.keys(peerSnapshots).length + " snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length + " (pruned, reloading)"
       return
     }
     refreshDisplay()
-    peerDebug = "files=" + peerFiles.length + " delegates=" + peerInstantiator.count + " [" + states.join(",") + "] snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length
+    peerDebug = "files=" + peerFiles.length + " fetched=" + Object.keys(peerSnapshots).length + " snapNotes=" + all.length + " peerNotes=" + peerNotes.length + " shown=" + displayNotes.length
   }
 
   // Internet fetch output (written by the built-in sync, read back here).
@@ -925,6 +921,9 @@ Panel {
     // Marker so the debug file shows scan state even if no delegate ever
     // reports back (rebuildPeerNotes overwrites this with full detail).
     if (peerDebug === "" && files.length > 0) peerDebug = "listed " + files.length + " file(s), waiting for load…"
+    // Content follows the listing: a new file is fetched immediately,
+    // changed content is re-fetched on every poll tick.
+    fetchPeerSnapshots()
   }
 
   function rescanPeers() {
@@ -935,28 +934,57 @@ Panel {
     }
   }
 
-  Instantiator {
-    id: peerInstantiator
-    model: root.peerFiles
-    delegate: Item {
-      required property var modelData
-      property var snapshot: ({ notes: [], pairs: [] })
-      property string loadState: "pending"
-      FileView {
-        path: modelData
-        watchChanges: true
-        printErrors: false
-        onFileChanged: reload()
-        onLoaded: {
-          parent.loadState = "ok"
-          parent.snapshot = root.loadPeerSnapshot(text())
-          root.rebuildPeerNotes()
-        }
-        onLoadFailed: { parent.loadState = "failed"; parent.snapshot = ({ notes: [], pairs: [] }); root.rebuildPeerNotes() }
-      }
+  // Peer snapshots keyed by file path. Filled by fetchPeerSnapshots()
+  // (Process + cat) rather than a FileView-per-peer delegate: FileView
+  // loads inside Instantiator delegates proved unreliable (stuck pending),
+  // while Process stdout delivery works everywhere in this panel.
+  property var peerSnapshots: ({})
+
+  function fetchPeerSnapshots() {
+    if (peerFetchProcess.running) return
+    if (!syncConfigured || peerFiles.length === 0) {
+      if (Object.keys(peerSnapshots).length > 0) { peerSnapshots = ({}); rebuildPeerNotes() }
+      return
     }
-    onObjectAdded: root.rebuildPeerNotes()
-    onObjectRemoved: root.rebuildPeerNotes()
+    var cmds = peerFiles.map(function (p, i) {
+      return "echo '===TRANSNOTEPEER:" + i + "==='; cat " + shellQuote(p) + " 2>/dev/null || echo READFAIL"
+    })
+    peerFetchProcess.command = ["bash", "-c", cmds.join("\n")]
+    peerFetchProcess.running = true
+  }
+
+  function applyPeerFetch(output) {
+    var chunks = {}
+    var idx = -1
+    var buf = []
+    String(output || "").split("\n").forEach(function (line) {
+      var m = line.match(/^===TRANSNOTEPEER:(\d+)===$/)
+      if (m) {
+        if (idx >= 0) chunks[idx] = buf.join("\n")
+        idx = parseInt(m[1], 10)
+        buf = []
+      } else if (idx >= 0) {
+        buf.push(line)
+      }
+    })
+    if (idx >= 0) chunks[idx] = buf.join("\n")
+    var next = {}
+    peerFiles.forEach(function (p, i) {
+      var c = chunks[i]
+      if (c === undefined || c.trim() === "" || c.trim() === "READFAIL") return
+      next[p] = root.loadPeerSnapshot(c)
+    })
+    if (JSON.stringify(next) !== JSON.stringify(peerSnapshots)) peerSnapshots = next
+    rebuildPeerNotes()
+  }
+
+  Process {
+    id: peerFetchProcess
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyPeerFetch(text)
+    }
   }
 
   Timer {
@@ -964,7 +992,7 @@ Panel {
     interval: 15000
     repeat: true
     running: root.syncConfigured
-    onTriggered: root.rescanPeers()
+    onTriggered: { root.rescanPeers(); root.fetchPeerSnapshots() }
   }
 
   Component.onCompleted: {
