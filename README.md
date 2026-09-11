@@ -84,8 +84,8 @@ your machine). The status line always tells you what is happening
 
 The `ariDev1.` in the name is just the publisher name (like a brand) — the
 plugin works under any username on any machine. Nothing is hardcoded.
-(Renamed from `rene.transnote` — if you still have the old id installed,
-remove it first: `omarchy plugin remove rene.transnote`, then add fresh
+(If you installed a copy from before the publisher rename, remove the old
+plugin first — `omarchy plugin remove` with the old id — then add fresh
 as below and redo the 3 Setup fields. Notes, keys, and the sync folder
 are untouched by the reinstall.)
 
