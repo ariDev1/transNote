@@ -2270,7 +2270,7 @@ Panel {
                   height: Style.space(180)
                   fillMode: Image.PreserveAspectFit
                   asynchronous: true
-                  cache: false
+                  cache: true
                   source: root.attUrl(attPath)
                 }
                 Text {
