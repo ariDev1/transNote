@@ -72,7 +72,7 @@ Then open TransNote from the Omarchy bar.
 The plugin ID is:
 
 ```text
-ariDev1.transnote
+aridev1.transnote
 ```
 
 ## Quick setup
@@ -305,7 +305,7 @@ When Internet synchronization is active, shared data is encrypted for configured
 For a Git-managed installation:
 
 ```bash
-omarchy plugin update ariDev1.transnote
+omarchy plugin update aridev1.transnote
 ```
 
 The current TransNote version is shown in the panel footer.
@@ -315,7 +315,7 @@ The current TransNote version is shown in the panel footer.
 Remove TransNote with:
 
 ```bash
-omarchy plugin remove ariDev1.transnote
+omarchy plugin remove aridev1.transnote
 ```
 
 Omarchy removes the installed plugin checkout.
