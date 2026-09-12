@@ -2,6 +2,8 @@
 
 Fast shared notes for the Omarchy bar.
 
+![TransNote running on Omarchy](preview.png)
+
 TransNote lets you write notes, share them between your machines or with trusted peers, add comments, and exchange attachments.
 
 It supports three modes:
