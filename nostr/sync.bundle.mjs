@@ -7557,12 +7557,16 @@ async function withPool(relays, fn) {
 }
 async function publishToRelays(pool, relays, ev) {
   const per = await Promise.allSettled(
-    relays.map(
-      (r) => Promise.race([
-        pool.publish([r], ev),
+    relays.map((r) => {
+      const pending = pool.publish([r], ev);
+      if (pending.length !== 1) {
+        return Promise.reject(new Error("unexpected publish result"));
+      }
+      return Promise.race([
+        pending[0],
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 2e4))
-      ])
-    )
+      ]);
+    })
   );
   return per.some((p) => p.status === "fulfilled");
 }
@@ -7665,18 +7669,26 @@ async function cmdFetch(a2) {
   const pairs = [];
   let newest = since;
   await withPool(relays, async (pool) => {
-    const filters = [
-      { kinds: [NOTE_KIND], "#p": [myHex], "#t": [APP_TAG], limit },
-      { kinds: [1], "#p": [myHex], "#t": [APP_TAG], limit }
-    ];
-    if (since > 0) filters.forEach((f) => {
-      f.since = since;
-    });
+    const addressedFilter = {
+      kinds: [NOTE_KIND, 1],
+      "#p": [myHex],
+      "#t": [APP_TAG],
+      limit
+    };
+    if (since > 0) addressedFilter.since = since;
+    let events = await pool.querySync(relays, addressedFilter);
     if (includePublic) {
-      filters.push({ kinds: [NOTE_KIND], "#t": [APP_TAG], limit });
-      filters.push({ kinds: [1], "#t": [APP_TAG], limit });
+      const publicFilter = {
+        kinds: [NOTE_KIND, 1],
+        "#t": [APP_TAG],
+        limit
+      };
+      if (since > 0) publicFilter.since = since;
+      const publicEvents = await pool.querySync(relays, publicFilter);
+      const byId = new Map(events.map((ev) => [ev.id, ev]));
+      for (const ev of publicEvents) byId.set(ev.id, ev);
+      events = Array.from(byId.values());
     }
-    const events = await pool.querySync(relays, filters);
     for (const ev of events) {
       if (typeof ev.created_at === "number" && ev.created_at > newest) newest = ev.created_at;
       const author = String(ev.pubkey || "").toLowerCase();
