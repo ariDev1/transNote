@@ -4,6 +4,7 @@
   "name": "TransNote",
   "version": "0.5.3",
   "author": "ariDev1",
+  "license": "ISC",
   "description": "Fast shared text notes: write notes, share with friends, read and comment. Works locally, via shared folders, and over the internet (encrypted). No terminal needed.",
   "kinds": [
     "bar-widget"

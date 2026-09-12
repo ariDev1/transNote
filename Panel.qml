@@ -1711,7 +1711,7 @@ Panel {
   function rescanPeers() {
     if (!syncConfigured) { peerFiles = []; return }
     if (!peerListProcess.running) {
-      peerListProcess.command = ["bash", "-c", "ls -1 " + syncDir + " 2>/dev/null | grep '\\.json$' || true"]
+      peerListProcess.command = ["bash", "-c", "ls -1 " + shellQuote(syncDir) + " 2>/dev/null | grep '\\.json$' || true"]
       peerListProcess.running = true
     }
   }
