@@ -4,13 +4,17 @@
   "description": "",
   "main": "Store.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:nostr": "bash tools/build_nostr_bundle.sh"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "nostr-tools": "^2.25.2"
+    "nostr-tools": "2.25.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }
