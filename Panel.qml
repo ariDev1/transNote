@@ -330,8 +330,10 @@ Panel {
     setAttachMsg(noteId, "")
     persist()
   }
-  // Remove sidecar dirs for a note (own bytes always, synced mirror only
-  // when asked — unsharing keeps local bytes, deleting drops both).
+  // Remove sidecar dirs for a note. includeSync=false deletes own bytes
+  // only, true deletes own + synced mirror (delete). Never use for
+  // unshare — that must keep local bytes and drop only the mirror
+  // (see toggleShare).
   function removeAttachDirs(noteId, includeSync) {
     var dirs = [ownAttachSubdir(noteId)]
     if (includeSync && syncAttachSubdir(noteId) !== "") dirs.push(syncAttachSubdir(noteId))
@@ -1219,7 +1221,13 @@ Panel {
       if (localNotes[i] && localNotes[i].id === id) {
         Store.setShared(localNotes[i], !(localNotes[i].shared === true), myId)
         // Unsharing retracts the synced mirror (local bytes stay).
-        if (!(localNotes[i].shared === true)) removeAttachDirs(id, false)
+        if (!(localNotes[i].shared === true)) {
+          var syncOnly = syncAttachSubdir(id)
+          if (syncOnly !== "") {
+            gcProcess.command = ["bash", "-c", "rm -rf " + shellQuote(syncOnly) + " 2>/dev/null; true"]
+            gcProcess.running = true
+          }
+        }
         touchLocalNotes()
         break
       }
@@ -2270,7 +2278,7 @@ Panel {
                   height: Style.space(180)
                   fillMode: Image.PreserveAspectFit
                   asynchronous: true
-                  cache: true
+                  cache: false
                   source: root.attUrl(attPath)
                 }
                 Text {
