@@ -60,14 +60,16 @@ Panel {
   readonly property string friendsPath: dataDir + "/friends.json"
   readonly property string keyFile: dataDir + "/nostr_key"
   // Folder this Panel.qml lives in — the plugin dir, wherever it is
-  // installed. Used to find nostr/sync.mjs without hardcoding paths.
+  // installed. Used to find the committed Nostr helper bundle.
   readonly property string pluginDir: {
     var u = String(Qt.resolvedUrl("./"))
     if (u.indexOf("file://") === 0) u = u.slice(7)
     if (u.length > 1 && u[u.length - 1] === "/") u = u.slice(0, -1)
     return u
   }
-  readonly property string syncScript: pluginDir + "/nostr/sync.mjs"
+  readonly property string syncBundle: pluginDir + "/nostr/sync.bundle.mjs"
+  readonly property string envBin: "/usr/bin/env"
+  readonly property string nodeBin: "/usr/bin/node"
   readonly property string relays: "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
   property string myHex: ""
   property string myNpub: ""
@@ -75,12 +77,9 @@ Panel {
   // Shown subtly in the footer so you can check you're on the latest
   // version. Read from manifest.json (single source of truth).
   property string pluginVersion: ""
-  // Internet sync state machine: init → findnode → depcheck → depinstall →
-  // key → ready. "node-missing" / "depfailed" show a plain-language error.
+  // Internet sync state machine: init → nodecheck → key → ready.
+  // "node-missing" and "setup-failed" fail closed without affecting LAN.
   property string setupStage: "init"
-  property int nodeCandidate: 0
-  property string nodeBin: ""
-  property string npmBin: "npm"
   property string netStatus: ""
   property bool syncRunning: false
   // Friends added in the UI (hex + name). Merged with the allowList setting
@@ -1014,24 +1013,28 @@ Panel {
   }
 
   // ------------------------------------------------- internet self-setup
-  // Everything here runs through background processes — the user never
-  // touches a terminal. Stages: findnode → depcheck → depinstall → key.
+  // Internet sync uses the fixed system Node.js executable and the
+  // committed helper bundle. Runtime package installation is not allowed.
   function shellQuote(s) {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
   }
 
-  function nodeCandidates() {
-    return ["node", home + "/.local/share/mise/shims/node", "/usr/bin/node", "/usr/local/bin/node", home + "/.local/bin/node"]
+  function sanitizedNodeCommand(args) {
+    return [envBin, "-i", "HOME=" + home, "PATH=/usr/bin:/bin", nodeBin].concat(args || [])
+  }
+
+  function nostrCommand(args) {
+    return sanitizedNodeCommand([syncBundle].concat(args || []))
   }
 
   function updateNetStatus() {
-    if (setupStage === "findnode" || setupStage === "depcheck" || setupStage === "depinstall" || setupStage === "key") {
+    if (setupStage === "nodecheck" || setupStage === "key") {
       netStatus = "Internet: setting up…"
     } else if (setupStage === "node-missing") {
-      netStatus = "Internet: off — needs Node.js installed"
+      netStatus = "Internet: off — install system Node.js"
       setupRetry.restart()
-    } else if (setupStage === "depfailed") {
-      netStatus = "Internet: setup failed (no connection?) — retrying"
+    } else if (setupStage === "setup-failed") {
+      netStatus = "Internet: setup failed — retrying"
       setupRetry.restart()
     } else if (syncRunning) {
       netStatus = "Internet: syncing…"
@@ -1044,24 +1047,11 @@ Panel {
 
   function setupStep() {
     updateNetStatus()
-    if (setupStage === "findnode") {
-      var cands = nodeCandidates()
-      if (nodeCandidate >= cands.length) {
-        setupStage = "node-missing"
-        updateNetStatus()
-        return
-      }
-      nodeProbe.command = [cands[nodeCandidate], "--version"]
+    if (setupStage === "nodecheck") {
+      nodeProbe.command = sanitizedNodeCommand(["--version"])
       nodeProbe.running = true
-    } else if (setupStage === "depcheck") {
-      depCheck.command = ["bash", "-c", "test -f " + shellQuote(pluginDir + "/node_modules/nostr-tools/package.json")]
-      depCheck.running = true
-    } else if (setupStage === "depinstall") {
-      netStatus = "Internet: downloading sync helper (once)…"
-      depInstall.command = [npmBin, "install", "--prefix", pluginDir, "--no-audit", "--no-fund"]
-      depInstall.running = true
     } else if (setupStage === "key") {
-      keyProcess.command = [nodeBin, syncScript, "ensure-key", "--key-file", keyFile]
+      keyProcess.command = nostrCommand(["ensure-key", "--key-file", keyFile])
       keyProcess.running = true
     } else if (setupStage === "ready") {
       updateNetStatus()
@@ -1071,13 +1061,7 @@ Panel {
   }
 
   function onNodeProbe(exitCode) {
-    if (exitCode === 0) {
-      nodeBin = nodeCandidates()[nodeCandidate]
-      npmBin = nodeBin.indexOf("/") >= 0 ? nodeBin.replace(/\/node$/, "/npm") : "npm"
-      setupStage = "depcheck"
-    } else {
-      nodeCandidate++
-    }
+    setupStage = exitCode === 0 ? "key" : "node-missing"
     setupStep()
   }
 
@@ -1089,10 +1073,10 @@ Panel {
         myNpub = Store.normalizeText(info.npub)
         setupStage = "ready"
       } else {
-        setupStage = "depfailed"
+        setupStage = "setup-failed"
       }
     } catch (e) {
-      setupStage = "depfailed"
+      setupStage = "setup-failed"
     }
     setupStep()
   }
@@ -1121,7 +1105,7 @@ Panel {
       return
     }
     if (input.indexOf("npub1") === 0) {
-      npubConvert.command = [nodeBin, syncScript, "npub-to-hex", "--npub", input]
+      npubConvert.command = nostrCommand(["npub-to-hex", "--npub", input])
       npubConvert.running = true
       return
     }
@@ -1171,17 +1155,17 @@ Panel {
 
   function startPublish() {
     var allow = Store.effectiveNostrAllow(allowList, friends)
-    pubProcess.command = [nodeBin, syncScript, "publish",
+    pubProcess.command = nostrCommand(["publish",
       "--key-file", keyFile, "--relays", relays,
-      "--in", nostrPublishPath, "--recipients", allow.join(",")]
+      "--in", nostrPublishPath, "--recipients", allow.join(",")])
     pubProcess.running = true
   }
 
   function startFetch() {
     var allow = Store.effectiveNostrAllow(allowList, friends)
-    fetchProcess.command = [nodeBin, syncScript, "fetch",
+    fetchProcess.command = nostrCommand(["fetch",
       "--key-file", keyFile, "--relays", relays,
-      "--allow-list", allow.join(","), "--out", nostrFetchPath]
+      "--allow-list", allow.join(","), "--out", nostrFetchPath])
     fetchProcess.running = true
   }
 
@@ -1398,23 +1382,6 @@ Panel {
     onExited: function (exitCode) { root.onNodeProbe(exitCode) }
   }
 
-  Process {
-    id: depCheck
-    running: false
-    onExited: function (exitCode) {
-      root.setupStage = exitCode === 0 ? "key" : "depinstall"
-      root.setupStep()
-    }
-  }
-
-  Process {
-    id: depInstall
-    running: false
-    onExited: function (exitCode) {
-      root.setupStage = exitCode === 0 ? "key" : "depfailed"
-      root.setupStep()
-    }
-  }
 
   Process {
     id: keyProcess
@@ -1647,15 +1614,14 @@ Panel {
     onTriggered: root.runSyncCycle()
   }
 
-  // Retry setup a while later (e.g. first launch was offline).
+  // Retry setup later if system Node.js was missing or setup failed.
   Timer {
     id: setupRetry
     interval: 120000
     repeat: false
     onTriggered: {
-      if (root.setupStage !== "depfailed" && root.setupStage !== "node-missing") return
-      if (root.nodeBin === "") { root.nodeCandidate = 0; root.setupStage = "findnode" }
-      else root.setupStage = "depcheck"
+      if (root.setupStage !== "setup-failed" && root.setupStage !== "node-missing") return
+      root.setupStage = "nodecheck"
       root.setupStep()
     }
   }
@@ -1787,11 +1753,11 @@ Panel {
     } else {
       syncStatus = "Local only — set syncDir to share"
     }
-    // Internet sets itself up in the background (node → helper → key).
+    // Internet checks fixed system Node.js, then initializes the
+    // committed helper bundle. Local and LAN operation do not depend on it.
     wlProbe.command = ["bash", "-c", "command -v wl-copy || true"]
     wlProbe.running = true
-    setupStage = "findnode"
-    nodeCandidate = 0
+    setupStage = "nodecheck"
     setupStep()
   }
 
