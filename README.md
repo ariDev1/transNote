@@ -1,197 +1,431 @@
-# TransNote — shared text notes for the Omarchy bar
+# TransNote
 
-Write notes, share them with qualified friends, read and comment.
-Works locally, over a shared folder (Syncthing/Dropbox/rsync), and over the
-internet (encrypted). Attachments are planned, not yet built.
+Fast shared notes for the Omarchy bar.
 
-No terminal needed — everything happens in the panel.
+TransNote lets you write notes, share them between your machines or with trusted peers, add comments, and exchange attachments.
 
-## How sharing works
+It supports three modes:
 
-| Path | Transport | Who can read |
-|------|-----------|--------------|
-| Local | This machine only | You |
-| Folder sync | Shared folder, one `<deviceId>.json` per machine | Device ids on your `allowList` |
-| Internet sync | Relays, end-to-end encrypted | Friends you added in the panel |
+- **Local** — notes stay on this machine.
+- **LAN / folder sync** — shared notes move through a folder synchronized by Syncthing, Dropbox, rsync, or another file-sync tool.
+- **Internet sync** — shared notes and comments are sent through Nostr relays using end-to-end encryption.
 
-Relays only ever see ciphertext — never your text. Removing someone stops
-future notes (old ciphertext stays on relays but is unreadable to them).
-Internet notes show a 🌐 badge.
+Normal use and setup are available from the TransNote panel.
 
-## Use it
+## Features
 
-1. Open TransNote in the bar and write a note. Press **Share** on it.
-   **Delete** is offered on all your local notes; **Share** only on notes
-   authored under your current machine name.
-2. To share on your local network (folder sync, works offline) — no terminal needed:
-   - Open TransNote in the bar → **Setup** tab.
-   - **1 — Name this machine** (e.g. `laptop`), press **Save**.
-   - **2 — Shared folder**: enter `~/transnote-lan`, press **Create folder**,
-     then **Save folder**. Sync that folder between the machines with
-     Syncthing (recommended), Dropbox, or for a quick test with SSH:
-     `sshfs <user>@<other-ip>:/home/<user>/transnote-lan ~/transnote-lan`
-   - **3 — Who can read**: enter every machine name, comma-separated
-     (e.g. `laptop,desktop`), press **Save**.
-    - Repeat on the other machine (other name, same folder, same list).
-      Keep names stable afterwards: notes are signed with the name active
-      when created — renaming hides their Share/Delete buttons and forces
-      everyone to allow-list the old name too (the Setup tab warns you).
-    - Check the footer: `Local only — set syncDir to share` means step 2 is
-      still open. `Sync on: ~/transnote-lan` means folder sync is active.
-      After pressing **Share** on a note, your `<deviceId>.json` appears in
-      the folder and shows up on the peer within ~15 seconds.
-    - Setup also reports **Peer files seen here (N)** plus a **Diagnostics**
-      line (`files=… fetched=… snapNotes=… peerNotes=… shown=…`) and a
-      **Check for peers now** button — the fastest way to see whether the
-      other side's file even arrives.
-   - Expert fallback: the same three values live in
-     `~/.config/omarchy/shell.json` in the `"id": "ariDev1.transnote"` entry
-     (`deviceId`, `syncDir`, `allowList`) — or via
-     `omarchy bar set ariDev1.transnote <key> <value>`. The Setup tab writes
-     through that same official command.
-3. To share over the internet:
-   - Copy **your code** in the panel (SHARE OVER INTERNET section) and send
-     it to a friend — message, email, anything.
-   - Paste the code your friend sends back under **Add a friend**, give them
-     a name, press **Add friend**.
-4. That's it. Shared notes sync by themselves about once a minute
-   (or press **Sync now**). Your friend's notes appear marked with 🌐,
-   and you can comment on them. Every note has a **Copy** button that puts
-   its content (never the headline) on the clipboard — no fiddly text
-   selection needed.
-   Fresh arrivals show a **• new** pill and a dot on the bar icon until
-   you open the panel. The panel grows with your notes and scrolls as one
-   card when content exceeds the screen. Actions live as quiet icons in the
-   title row (share, copy, delete — hover for tooltips); attaching hides
-   behind the 📎 toggle in the comment row. New notes arrive with a random
-   translucent tint; change it from the palette button in the title row
-   (or `t` on the keyboard, full circle back to plain) — synced with
-   the note. Fenced code blocks
-   (```` ``` ````) render monospace with their language label and a
-   per-block **Copy block** button — ideal for moving snippets between
-   machines.
+- Local text notes
+- Share and unshare notes
+- Peer comments
+- LAN folder synchronization
+- Encrypted Internet synchronization
+- File attachments over folder sync
+- SHA-256 verification of received attachments
+- Image thumbnails and text previews
+- Copy note content to the clipboard
+- Fenced code blocks with per-block copy
+- Keyboard navigation
+- Per-note color tint
+- New-note indicators
+- Local backup of the previous note state
 
-## Keyboard
+Notes are private by default. TransNote does not publish a note until you explicitly share it.
 
-The panel is fully keyboard-driven (Omarchy idiom): `j`/`k` or arrows
-move the note cursor, `Enter` expands, `c` copies, `s` shares, `x`
-deletes your own notes, `a` opens the attach row, `/` jumps to compose,
-`Ctrl+Enter` adds the note, `Esc` closes. Typing in any field passes keys
-through automatically.
+## Requirements
 
-The first time, the panel sets everything up by itself (about a minute:
-it prepares the sync helper and creates your private key, which stays on
-your machine). The status line always tells you what is happening
-(`setting up…`, `on (2 friends)`, `couldn't reach friends — will retry`).
+- Omarchy with Quickshell plugin support
+- Bash and standard Linux command-line utilities
+- `wl-copy` for clipboard operations
+- `xdg-open` for opening received attachments
 
-## Attachments (folder sync)
+For **Internet sync**, TransNote also requires:
 
-Attach files to your own notes: paste a path in the attach row, press
-**Attach**. Paths complete as you type (Tab for the common prefix, click
-a suggestion, Esc to dismiss) — same in the Setup folder field. Code fences (```` ``` ````) keep rendering as text blocks;
-*attached files* are the real files:
+- Node.js
+- npm
 
-- Bytes travel as sidecars in `<syncDir>/.attachments/` (synced like the
-  snapshots; list with `ls -la`, plain `ls` hides dot-dirs); the note
-  itself carries only name, size, and SHA-256.
-- Max **25 MB** per file, rejected with a message.
-- Images show a thumbnail, text files a peek, everything a
-  **verified ✓** badge once the local re-hash matches (mismatch warns,
-  missing bytes read `syncing…` until they arrive).
-- **Save** copies to `~/Downloads` (never overwrites: `.1`, `.2`, …).
-  **Open** uses the system handler on explicit click only — executables
-  (risky extensions, `+x` bit) are save-only and refused with a notice.
-- Unsharing retracts the synced mirror; deleting drops both copies.
-- Internet-shared notes list attachments as folder-sync-only (metadata
-  travels, bytes don't).
-
-## Safety notes
-
-- Your private key file (`~/.local/share/transnote/nostr_key`) is **secret**,
-  like a password. Never share it — only your code.
-- Notes default to **private**. Nothing leaves the machine until you press
-  **Share** *and* added a friend.
-- The sync refuses to publish without recipients (no accidental public posts).
-- Colleagues on the same machine cannot read your notes: the panel locks
-  its data folder to owner-only (`700`) and every file it writes
-  (notes, friends, key, sync queue, downloads) to owner-only (`600`) on
-  every save. Folder sync is the exception — its snapshot is also locked
-  down, but anyone you admit to the shared folder can read what you Share
-  there, so keep the folder itself non-shared. For sensitive notes prefer
-  internet sharing (end-to-end encrypted).
-
-## Install on another machine (friends & family)
-
-The `ariDev1.` in the name is just the publisher name (like a brand) — the
-plugin works under any username on any machine. Nothing is hardcoded.
-(If you installed a copy from before the publisher rename, remove the old
-plugin first — `omarchy plugin remove` with the old id — then add fresh
-as below and redo the 3 Setup fields. Notes, keys, and the sync folder
-are untouched by the reinstall.)
-
-The repo is private, so first give your friend access (GitHub → repo
-Settings → Collaborators → add them). Then on their machine:
-
-```bash
-omarchy plugin add https://github.com/ariDev1/transNote.git --enable
-omarchy restart shell
-```
-
-Open TransNote in the bar — the first launch sets everything up by itself.
-Then exchange codes (panel → SHARE OVER INTERNET) and add each other.
-
-If the panel says it needs Node.js:
+Install Node.js and npm on Omarchy if they are not already available:
 
 ```bash
 omarchy pkg add nodejs npm
-omarchy restart shell
 ```
 
-## Updates
+TransNote uses the npm package `nostr-tools`.
 
-When a new version is out, on each machine:
+When Internet sync is initialized for the first time, TransNote checks for this dependency and installs it into the plugin directory with npm if necessary.
+
+LAN folder synchronization does not require Node.js or Nostr.
+
+Syncthing is recommended for LAN synchronization, but it is not required. Any tool that reliably synchronizes the selected folder can be used.
+
+## Installation
+
+Install and enable TransNote directly from GitHub:
+
+```bash
+omarchy plugin add https://github.com/ariDev1/transNote.git --enable
+```
+
+Then open TransNote from the Omarchy bar.
+
+The plugin ID is:
+
+```text
+ariDev1.transnote
+```
+
+## Quick setup
+
+Open the **Setup** tab in TransNote.
+
+### 1. Name this machine
+
+Choose a stable device name such as:
+
+```text
+laptop
+```
+
+or:
+
+```text
+desktop
+```
+
+Keep this name stable after you start sharing notes.
+
+### 2. Configure a shared folder
+
+For LAN synchronization, select a folder such as:
+
+```text
+~/transnote-lan
+```
+
+TransNote can create the local folder for you.
+
+The same folder must then be synchronized between your machines.
+
+### 3. Configure trusted peers
+
+Add the device names that are allowed to participate in your folder-sync setup.
+
+Example:
+
+```text
+laptop,desktop
+```
+
+TransNote writes one snapshot per device into the shared folder.
+
+Only notes marked as shared are included.
+
+## LAN synchronization
+
+LAN synchronization uses normal files. It does not require an Internet service.
+
+A typical configuration is:
+
+```text
+Machine A
+~/transnote-lan
+      ⇅
+   Syncthing
+      ⇅
+~/transnote-lan
+Machine B
+```
+
+Each device writes its own snapshot:
+
+```text
+<deviceId>.json
+```
+
+For example:
+
+```text
+laptop.json
+desktop.json
+```
+
+Peer snapshots are checked automatically.
+
+You can also use **Check for peers now** in the Setup panel.
+
+The Setup panel shows synchronization diagnostics when troubleshooting is necessary.
+
+### Important privacy note
+
+Folder-sync snapshots contain the notes that you explicitly share through that folder.
+
+Anyone who has access to the synchronized folder can potentially read those shared files.
+
+Use appropriate folder permissions and only synchronize the folder with machines and users you trust.
+
+For sensitive remote sharing, use TransNote's encrypted Internet synchronization instead.
+
+## Internet synchronization
+
+Internet synchronization uses Nostr relays.
+
+TransNote creates a private Nostr key on your machine and shows a public sharing code.
+
+To connect with another TransNote user:
+
+1. Copy your public code from the TransNote panel.
+2. Send it to your friend through a trusted communication channel.
+3. Ask them for their code.
+4. Add their code under **Add a friend**.
+
+Your private key stays on your machine.
+
+The private key is stored at:
+
+```text
+~/.local/share/transnote/nostr_key
+```
+
+Never share this file.
+
+Internet synchronization uses encrypted messages. Relay servers receive ciphertext rather than your note text.
+
+TransNote will not publish Internet notes when no recipients are configured.
+
+## Attachments
+
+Attachments are supported through **folder synchronization**.
+
+Attach a file to one of your own notes from the attachment row.
+
+Maximum attachment size:
+
+```text
+25 MB
+```
+
+Attachment bytes are stored below:
+
+```text
+<syncDir>/.attachments/
+```
+
+The note itself contains attachment metadata including:
+
+- file name
+- file size
+- SHA-256 hash
+
+Received files are hashed locally before TransNote marks them as verified.
+
+TransNote can:
+
+- show image thumbnails
+- preview text files
+- save received files to `~/Downloads`
+- open safe files with the system handler
+- report missing or invalid attachment data
+
+Saved files never overwrite an existing file. TransNote creates a new numbered file name instead.
+
+Files that look executable, or files with the executable bit set, are not opened automatically. They remain save-only.
+
+Attachment bytes are currently transported through folder sync. Internet-shared notes can carry attachment metadata, but not the attachment bytes.
+
+## Comments
+
+Shared notes can contain comments.
+
+Comments follow the same synchronization path as the note:
+
+- folder-synchronized notes exchange comments through peer snapshots
+- Internet-shared notes exchange comments through encrypted Internet synchronization
+
+Local comments are stored with the local note state.
+
+## Keyboard controls
+
+TransNote supports keyboard-first operation.
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Move between notes |
+| `↑` / `↓` | Move between notes |
+| `Enter` | Expand selected note |
+| `c` | Copy note content |
+| `s` | Share or unshare |
+| `x` | Delete your own note |
+| `a` | Open attachment controls |
+| `t` | Change note tint |
+| `/` | Focus note composer |
+| `Ctrl+Enter` | Add note |
+| `Esc` | Close or leave the current action |
+
+When a text field has focus, normal typing is passed to that field.
+
+## Data and privacy
+
+TransNote stores its local data below:
+
+```text
+~/.local/share/transnote/
+```
+
+This includes:
+
+```text
+notes.json
+notes.json.bak
+friends.json
+nostr_key
+attachments/
+```
+
+TransNote restricts its private data directory and files to the local user.
+
+The previous `notes.json` state is preserved as:
+
+```text
+notes.json.bak
+```
+
+This provides a simple recovery point for local notes.
+
+### What leaves the machine
+
+A local note does not leave the machine unless you explicitly share it.
+
+When folder synchronization is active, shared note data is written to the configured sync folder.
+
+When Internet synchronization is active, shared data is encrypted for configured recipients before it is sent to the configured Nostr relays.
+
+## Updating
+
+For a Git-managed installation:
 
 ```bash
 omarchy plugin update ariDev1.transnote
-omarchy restart shell
 ```
 
-Check you're current: the panel footer ends with `· vX.Y.Z`.
+The current TransNote version is shown in the panel footer.
 
-## If shared notes don't appear
+## Removal
 
-Work down this list — it covers every failure seen in real LAN testing:
+Remove TransNote with:
 
-1. **Are the folders actually linked?** Setup only creates a *local* folder.
-   Prove the link past TransNote: `touch ~/transnote-lan/link-test.txt`
-   on machine A — it must appear on machine B within a minute, and vice
-   versa. If not, fix Syncthing/sshfs first (folder shared + accepted on
-   both sides, status Up to Date). Nothing else matters until this works.
-2. **Did the peer write its snapshot?** Its `<deviceId>.json` must exist in
-   the folder with your note inside (`shared: true`). Saving Setup writes
-   it immediately on current versions — on old versions, toggle **Share**
-   off/on (or add a comment) to force the write. Both machines must run
-   the same version (compare footers).
-3. **Is the note Shared?** Only ◉ notes publish; ○ notes never leave the
-   machine. Press **Share** on it.
-4. **Does each allow-list name the other's author?** Matching is against
-   note *authors* (the machine name active when the note was created),
-   not file names. `Sharing with: …` in the footer shows your effective
-   list. If a Save doesn't take effect, `omarchy restart shell` is the
-   reliable closer after identity/allow-list changes.
-5. **Wait ~15 seconds** (folder poll cadence), then check Setup's
-   **Diagnostics** line: `files=` (scan) → `fetched=`/`snapNotes=`
-   (read) → `peerNotes=` (merge) → `shown=` (display) pinpoints the stage.
-6. **Lost local notes?** Every save rotates the previous state aside to
-   `~/.local/share/transnote/notes.json.bak` (owner-only, like everything
-   else). Recover with:
-   `cp ~/.local/share/transnote/notes.json.bak ~/.local/share/transnote/notes.json`
-   — the panel picks it up by itself. Conflict copies
-   (`*.sync-conflict-*.json`) in the sync folder are ignored, never merged.
+```bash
+omarchy plugin remove ariDev1.transnote
+```
 
-## Files (for the curious)
+Omarchy removes the installed plugin checkout.
 
-- `Panel.qml` — widget UI, self-setup, friends, automatic sync
-- `Store.js` — note logic (pure JS, panel + Node compatible)
-- `nostr/sync.mjs` — relay bridge used by the panel (`ensure-key`,
-  `npub-to-hex`, `publish`, `fetch`)
+TransNote user data under:
+
+```text
+~/.local/share/transnote/
+```
+
+and an external synchronization folder such as:
+
+```text
+~/transnote-lan
+```
+
+are separate from the plugin installation.
+
+This prevents plugin removal from silently destroying user notes, keys, or synchronized files.
+
+Delete those directories manually only when you intentionally want to remove their data.
+
+## Troubleshooting
+
+### Peer notes do not appear
+
+First verify that the synchronization folder itself works independently of TransNote.
+
+Create a temporary file on one machine:
+
+```bash
+touch ~/transnote-lan/transnote-sync-test
+```
+
+Confirm that the file arrives on the other machine.
+
+If it does not, fix the folder synchronization system first.
+
+Then check:
+
+1. Both machines use different stable device names.
+2. Each machine allows the other device name.
+3. The note is marked as shared.
+4. The peer snapshot exists in the synchronization folder.
+5. Both machines run a compatible TransNote version.
+
+The Setup panel also provides peer and synchronization diagnostics.
+
+### Recover the previous local note state
+
+TransNote keeps the previous state at:
+
+```text
+~/.local/share/transnote/notes.json.bak
+```
+
+To restore it:
+
+```bash
+cp ~/.local/share/transnote/notes.json.bak \
+   ~/.local/share/transnote/notes.json
+```
+
+### Internet sync reports that Node.js is missing
+
+Install the required runtime:
+
+```bash
+omarchy pkg add nodejs npm
+```
+
+Then restart or reopen TransNote.
+
+## Project structure
+
+```text
+Panel.qml
+Store.js
+nostr/sync.mjs
+manifest.json
+package.json
+package-lock.json
+```
+
+`Panel.qml`
+: Omarchy / Quickshell user interface and runtime integration.
+
+`Store.js`
+: Note, comment, peer, attachment, and validation logic.
+
+`nostr/sync.mjs`
+: Internet synchronization and encryption bridge.
+
+`manifest.json`
+: Omarchy plugin manifest.
+
+`package.json`
+: JavaScript dependency declaration.
+
+`package-lock.json`
+: Locked npm dependency versions and integrity hashes.
+
+## License
+
+TransNote is open-source software released under the **ISC License**.
+
+See [`LICENSE`](LICENSE).
+
+## Source
+
+GitHub:
+
+```text
+https://github.com/ariDev1/transNote
+```
