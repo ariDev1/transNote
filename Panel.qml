@@ -11,7 +11,7 @@ import "Store.js" as Store
 // - Many notes, each with comments.
 // - Own snapshot syncs through a shared folder (Syncthing/Dropbox/rsync).
 // - Only peers on your allow-list can read your shared notes / comment.
-// - Attachments: schema-reserved (`attachments: []`), UI placeholder only.
+// - Attachments: folder-synced sidecar files with metadata and SHA-256 verification.
 Panel {
   id: root
   moduleName: "ariDev1.transnote"
