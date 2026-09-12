@@ -40,20 +40,15 @@ Notes are private by default. TransNote does not publish a note until you explic
 - `wl-copy` for clipboard operations
 - `xdg-open` for opening received attachments
 
-For **Internet sync**, TransNote also requires:
+For **Internet sync**, TransNote also requires system Node.js.
 
-- Node.js
-- npm
-
-Install Node.js and npm on Omarchy if they are not already available:
+Install it explicitly on Omarchy if it is not already available:
 
 ```bash
-omarchy pkg add nodejs npm
+omarchy pkg add nodejs
 ```
 
-TransNote uses the npm package `nostr-tools`.
-
-When Internet sync is initialized for the first time, TransNote checks for this dependency and installs it into the plugin directory with npm if necessary.
+TransNote does not install Node.js or npm packages at runtime. The reviewed Nostr helper dependencies are shipped inside the committed plugin bundle.
 
 LAN folder synchronization does not require Node.js or Nostr.
 
@@ -381,11 +376,13 @@ cp ~/.local/share/transnote/notes.json.bak \
 
 ### Internet sync reports that Node.js is missing
 
-Install the required runtime:
+Install the required system runtime:
 
 ```bash
-omarchy pkg add nodejs npm
+omarchy pkg add nodejs
 ```
+
+Internet sync stays disabled until `/usr/bin/node` is available. Local notes and LAN synchronization continue to work without Node.js.
 
 Then restart or reopen TransNote.
 
@@ -395,6 +392,8 @@ Then restart or reopen TransNote.
 Panel.qml
 Store.js
 nostr/sync.mjs
+nostr/sync.bundle.mjs
+tools/build_nostr_bundle.sh
 manifest.json
 package.json
 package-lock.json
@@ -407,7 +406,13 @@ package-lock.json
 : Note, comment, peer, attachment, and validation logic.
 
 `nostr/sync.mjs`
-: Internet synchronization and encryption bridge.
+: Maintainable source for the Internet synchronization and encryption bridge.
+
+`nostr/sync.bundle.mjs`
+: Reviewed runtime bundle used by the plugin.
+
+`tools/build_nostr_bundle.sh`
+: Development-only script that generates the committed runtime bundle.
 
 `manifest.json`
 : Omarchy plugin manifest.
