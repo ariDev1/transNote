@@ -531,7 +531,66 @@ function sanitizeNostrFetch(raw, allowList, myHex) {
       pairs.push({ noteId: noteId, comment: sc })
     }
   } catch (e) { /* ignore bad fetch file */ }
+  // De-duplicate notes by id (newest wins): relays return the same event
+  // once per relay, and every sync cycle republishes shared notes.
+  var notesById = {}
+  for (var k = 0; k < notes.length; k++) {
+    var prev = notesById[notes[k].id]
+    if (!prev || (notes[k].updatedAt || "") >= (prev.updatedAt || "")) notesById[notes[k].id] = notes[k]
+  }
+  notes = Object.keys(notesById).map(function (key) { return notesById[key] })
+  // Collapse relay duplicates: before stable `ref` ids existed, every
+  // 60s republish of the same outbox comment created a new event id, so
+  // the same (note, author, text) arrives N times with N different
+  // 64-hex ids. Group by content: keep every distinct stable id (an
+  // intentional repeated text stays visible twice), drop legacy hex
+  // shadows once a stable copy exists, and collapse a hex-only group to
+  // its earliest copy.
+  pairs = dedupNostrPairs(pairs)
   return { notes: notes, pairs: pairs }
+}
+
+// 64-hex ids are Nostr event ids (legacy relay duplicates); anything
+// else is a stable outbox id (e.g. "c-...").
+function isEventId(value) {
+  return /^[0-9a-fA-F]{64}$/.test(normalizeText(value))
+}
+
+function dedupNostrPairs(pairs) {
+  var groups = {}
+  var order = []
+  for (var i = 0; i < pairs.length; i++) {
+    var p = pairs[i]
+    if (!p || !p.comment) continue
+    var key = p.noteId + "\0" + p.comment.author + "\0" + p.comment.text
+    if (!groups[key]) { groups[key] = []; order.push(key) }
+    groups[key].push(p)
+  }
+  var out = []
+  for (var g = 0; g < order.length; g++) {
+    var entries = groups[order[g]]
+    var stable = []
+    var seenStable = {}
+    var legacy = []
+    for (var j = 0; j < entries.length; j++) {
+      var id = entries[j].comment.id
+      if (isEventId(id)) {
+        legacy.push(entries[j])
+      } else if (!seenStable[id]) {
+        seenStable[id] = true
+        stable.push(entries[j])
+      }
+    }
+    if (stable.length > 0) {
+      // Stable copies win; legacy shadows of the same text are dropped.
+      out = out.concat(stable)
+    } else if (legacy.length > 0) {
+      // No stable copy yet: show the earliest legacy copy only.
+      legacy.sort(function (a, b) { return a.comment.createdAt < b.comment.createdAt ? -1 : 1 })
+      out.push(legacy[0])
+    }
+  }
+  return out
 }
 
 // Build publish.json for `sync.mjs publish` from shared local notes +
@@ -582,6 +641,7 @@ if (typeof module !== "undefined") {
     sanitizeFriends: sanitizeFriends,
     effectiveNostrAllow: effectiveNostrAllow,
     sanitizeNostrFetch: sanitizeNostrFetch,
+    dedupNostrPairs: dedupNostrPairs,
     buildNostrPublish: buildNostrPublish,
     addComment: addComment,
     setShared: setShared,

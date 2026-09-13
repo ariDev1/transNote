@@ -33,7 +33,12 @@
 //            content=nip44(JSON {title,body}).
 //   comment: kind 1, tags p=<recipientHex>, i=<note-id>, t=transnote,
 //            enc=nip44-v2, client=transnote (+ e-tag when parent known);
-//            content=nip44(JSON {text}).
+//            content=nip44(JSON {text, ref}).
+//            `ref` is the stable outbox comment id (e.g. "c-..."). Every
+//            sync cycle republishes the whole outbox, so without `ref` each
+//            republish would look like a brand-new comment (new event id)
+//            and the same text would pile up once per minute. Fetch prefers
+//            `ref` as the comment id, making republishes idempotent.
 // Relays see ciphertext + sender/recipient pubkeys only — NOT the text.
 // Qualification happens on receipt: only allow-listed authors (or yourself)
 // are merged. Removing someone stops FUTURE notes, it does not delete old
@@ -242,7 +247,7 @@ async function cmdPublish(a) {
         ];
         if (c.parentEventId) tags.unshift(["e", String(c.parentEventId), "", "root"]);
         const ev = finalizeEvent(
-          { kind: 1, created_at: Math.floor(Date.now() / 1000), tags, content: encryptFor(sk, r, { text: String(c.text || "") }) },
+          { kind: 1, created_at: Math.floor(Date.now() / 1000), tags, content: encryptFor(sk, r, { text: String(c.text || ""), ref: String(c.ref || "") }) },
           sk,
         );
         const ok = await publishToRelays(pool, relays, ev);
@@ -322,10 +327,14 @@ async function cmdFetch(a) {
         } else if (ev.kind === 1) {
           const noteD = tag(ev, "i").split(":")[0];
           if (!noteD || !clear.text) continue;
+          // Stable id: republishes of the same outbox comment share `ref`,
+          // so they merge instead of piling up. Legacy events (published
+          // before `ref` existed) fall back to the event id.
+          const stableRef = typeof clear.ref === "string" ? clear.ref.trim().slice(0, 120) : "";
           pairs.push({
             noteId: noteD,
             comment: {
-              id: ev.id,
+              id: stableRef !== "" ? stableRef : ev.id,
               author,
               text: String(clear.text || ""),
               createdAt: new Date((ev.created_at || 0) * 1000).toISOString(),

@@ -2768,7 +2768,7 @@ Panel {
       }
       Text {
         width: parent.width
-        text: "Sharing with: " + (root.nostrAllowList.length > 0 ? root.nostrAllowList.map(function (h) { return root.shortAuthor(h) }).join(", ") : "(nobody yet)") + " · Attachments coming soon" + (root.pluginVersion !== "" ? " · v" + root.pluginVersion : "")
+        text: "Sharing with: " + (root.nostrAllowList.length > 0 ? root.nostrAllowList.map(function (h) { return root.shortAuthor(h) }).join(", ") : "(nobody yet)") + (root.pluginVersion !== "" ? " · v" + root.pluginVersion : "")
         color: Qt.darker(root.foreground, 1.4)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

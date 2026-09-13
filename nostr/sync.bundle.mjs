@@ -7642,7 +7642,7 @@ async function cmdPublish(a2) {
         ];
         if (c.parentEventId) tags.unshift(["e", String(c.parentEventId), "", "root"]);
         const ev = finalizeEvent(
-          { kind: 1, created_at: Math.floor(Date.now() / 1e3), tags, content: encryptFor(sk, r, { text: String(c.text || "") }) },
+          { kind: 1, created_at: Math.floor(Date.now() / 1e3), tags, content: encryptFor(sk, r, { text: String(c.text || ""), ref: String(c.ref || "") }) },
           sk
         );
         const ok = await publishToRelays(pool, relays, ev);
@@ -7717,10 +7717,11 @@ async function cmdFetch(a2) {
         } else if (ev.kind === 1) {
           const noteD = tag(ev, "i").split(":")[0];
           if (!noteD || !clear.text) continue;
+          const stableRef = typeof clear.ref === "string" ? clear.ref.trim().slice(0, 120) : "";
           pairs.push({
             noteId: noteD,
             comment: {
-              id: ev.id,
+              id: stableRef !== "" ? stableRef : ev.id,
               author,
               text: String(clear.text || ""),
               createdAt: new Date((ev.created_at || 0) * 1e3).toISOString()
