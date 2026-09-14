@@ -286,6 +286,86 @@ function pruneOutbox(outbox, localNotes, peerNotes) {
   return sanitizeOutbox(outbox).filter(function (entry) { return !!alive[entry.noteId] })
 }
 
+// Deletion tombstones: { "<noteId>": "<deletedAtIso>" }.
+// A local delete must survive the next sync — otherwise folder peers with
+// stale snapshots and Nostr relays (which keep ciphertext) resurrect the
+// note on the next fetch. Tombstones are published in the LAN snapshot
+// (deletedIds) and as NIP-09 kind-5 events on Nostr, and every merge path
+// filters against them. Delete-wins over concurrent edits.
+function sanitizeDeleted(raw) {
+  var out = {}
+  try {
+    if (Array.isArray(raw)) {
+      raw.forEach(function (entry) {
+        if (typeof entry === "string") {
+          var id = normalizeText(entry)
+          if (id !== "") out[id] = nowIso()
+        } else if (entry && typeof entry === "object") {
+          var eid = normalizeText(entry.id || entry.noteId)
+          if (eid !== "") out[eid] = normalizeText(entry.deletedAt) || nowIso()
+        }
+      })
+    } else if (raw && typeof raw === "object") {
+      Object.keys(raw).forEach(function (k) {
+        var id = normalizeText(k)
+        if (id === "") return
+        var v = raw[k]
+        out[id] = normalizeText(typeof v === "string" ? v : (v && v.deletedAt)) || nowIso()
+      })
+    }
+  } catch (e) { /* ignore bad tombstone block */ }
+  return out
+}
+
+function addTombstone(deletedMap, id) {
+  var out = {}
+  var src = deletedMap && typeof deletedMap === "object" ? deletedMap : {}
+  Object.keys(src).forEach(function (k) { out[k] = src[k] })
+  var clean = normalizeText(id)
+  if (clean !== "") out[clean] = nowIso()
+  return out
+}
+
+function mergeDeleted() {
+  var out = {}
+  for (var i = 0; i < arguments.length; i++) {
+    var m = sanitizeDeleted(arguments[i])
+    Object.keys(m).forEach(function (k) {
+      if (!out[k] || m[k] > out[k]) out[k] = m[k]
+    })
+  }
+  return out
+}
+
+function isDeleted(deletedMap, id) {
+  if (!deletedMap || typeof deletedMap !== "object") return false
+  return !!deletedMap[normalizeText(id)]
+}
+
+function filterDeletedNotes(notes, deletedMap) {
+  if (!deletedMap || typeof deletedMap !== "object") return notes
+  return (Array.isArray(notes) ? notes : []).filter(function (n) {
+    return n && !isDeleted(deletedMap, n.id)
+  })
+}
+
+// Drop tombstones older than maxAgeDays (default 180) so the map stays
+// small. Only call this when you are sure all peers/relays have observed
+// the deletion — otherwise old ciphertext can resurrect the note.
+function pruneDeleted(deletedMap, maxAgeDays) {
+  var days = Number(maxAgeDays)
+  if (!isFinite(days) || days <= 0) days = 180
+  var cutoff = Date.now() - days * 24 * 3600 * 1000
+  var out = {}
+  sanitizeDeleted(deletedMap)
+  var src = deletedMap && typeof deletedMap === "object" ? deletedMap : {}
+  Object.keys(src).forEach(function (k) {
+    var t = Date.parse(src[k])
+    if (!isFinite(t) || t >= cutoff) out[k] = src[k]
+  })
+  return out
+}
+
 // Hex recipients among the allow-list — the only entries usable for
 // encrypted Nostr publish. Device ids are for folder sync and ignored here.
 function hexRecipients(allowList) {
@@ -484,15 +564,19 @@ function effectiveNostrAllow(allowList, friends) {
   return out
 }
 
-// Convert `fetch --out` JSON into internal { notes, pairs }.
+// Convert `fetch --out` JSON into internal { notes, pairs, deleted }.
 // fetch output: { notes:[{id,title,body,authorHex,updatedAt,eventId}],
-//                 pairs:[{noteId,comment:{id,author,text,createdAt}}] }.
+//                 pairs:[{noteId,comment:{id,author,text,createdAt}}],
+//                 deleted:[{noteId,eventId,author}] }.
 // Returned notes are marked shared=true and carry the hex author so the
 // normal allow-list filter applies. Unknown authors are dropped unless
 // they are myHex itself (second device of the same user).
-function sanitizeNostrFetch(raw, allowList, myHex) {
+// `deleted` tombstones from relays plus the local `knownDeleted` map both
+// suppress notes/pairs: delete-wins, so a deleted note never resurrects.
+function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
   var notes = []
   var pairs = []
+  var deleted = []
   try {
     var parsed = typeof raw === "string" ? JSON.parse(raw || "") : (raw || {})
     var me = normalizePubkey(myHex)
@@ -530,7 +614,23 @@ function sanitizeNostrFetch(raw, allowList, myHex) {
       if (noteId === "" || !sc) continue
       pairs.push({ noteId: noteId, comment: sc })
     }
+    var rawDeleted = parsed && Array.isArray(parsed.deleted) ? parsed.deleted : []
+    for (var d = 0; d < rawDeleted.length; d++) {
+      var del = rawDeleted[d]
+      if (!del || typeof del !== "object") continue
+      var delId = normalizeText(del.noteId || del.id || del.d)
+      if (delId === "") continue
+      var delAuthor = normalizePubkey(del.author || del.authorHex)
+      if (delAuthor !== "" && !(delAuthor === me || isQualified(delAuthor, allowList))) continue
+      deleted.push({ noteId: delId, author: delAuthor, deletedAt: normalizeText(del.deletedAt) || nowIso() })
+    }
   } catch (e) { /* ignore bad fetch file */ }
+  // Delete-wins: relay tombstones + locally known tombstones suppress
+  // notes and pairs, so a deleted note can never resurrect on re-fetch.
+  var tomb = sanitizeDeleted(knownDeleted)
+  deleted.forEach(function (entry) {
+    if (entry && entry.noteId !== "") tomb[entry.noteId] = entry.deletedAt || nowIso()
+  })
   // De-duplicate notes by id (newest wins): relays return the same event
   // once per relay, and every sync cycle republishes shared notes.
   var notesById = {}
@@ -539,6 +639,7 @@ function sanitizeNostrFetch(raw, allowList, myHex) {
     if (!prev || (notes[k].updatedAt || "") >= (prev.updatedAt || "")) notesById[notes[k].id] = notes[k]
   }
   notes = Object.keys(notesById).map(function (key) { return notesById[key] })
+  notes = filterDeletedNotes(notes, tomb)
   // Collapse relay duplicates: before stable `ref` ids existed, every
   // 60s republish of the same outbox comment created a new event id, so
   // the same (note, author, text) arrives N times with N different
@@ -547,7 +648,8 @@ function sanitizeNostrFetch(raw, allowList, myHex) {
   // shadows once a stable copy exists, and collapse a hex-only group to
   // its earliest copy.
   pairs = dedupNostrPairs(pairs)
-  return { notes: notes, pairs: pairs }
+  pairs = pairs.filter(function (p) { return p && !isDeleted(tomb, p.noteId) })
+  return { notes: notes, pairs: pairs, deleted: deleted, tombstones: tomb }
 }
 
 // 64-hex ids are Nostr event ids (legacy relay duplicates); anything
@@ -594,8 +696,11 @@ function dedupNostrPairs(pairs) {
 }
 
 // Build publish.json for `sync.mjs publish` from shared local notes +
-// outbox comments. sync.mjs encrypts one copy per --recipients pubkey.
-function buildNostrPublish(localNotes, outbox) {
+// outbox comments + deletion tombstones pending upload.
+// sync.mjs encrypts one copy per --recipients pubkey. `pendingDeletes`
+// is an array of noteIds deleted since the last successful publish;
+// when omitted, all tombstones are queued (safe, idempotent).
+function buildNostrPublish(localNotes, outbox, deletedMap, pendingDeletes) {
   var notes = []
   var comments = []
   ;(Array.isArray(localNotes) ? localNotes : []).forEach(function (n) {
@@ -607,7 +712,12 @@ function buildNostrPublish(localNotes, outbox) {
   sanitizeOutbox(outbox).forEach(function (entry) {
     comments.push({ ref: entry.comment.id, noteD: entry.noteId, text: entry.comment.text })
   })
-  return { notes: notes, comments: comments }
+  var tomb = sanitizeDeleted(deletedMap)
+  var queue = Array.isArray(pendingDeletes)
+    ? pendingDeletes.map(normalizeText).filter(function (id) { return id !== "" && !!tomb[id] })
+    : Object.keys(tomb)
+  var deletes = queue.map(function (id) { return { ref: "del-" + id, noteId: id, deletedAt: tomb[id] } })
+  return { notes: notes, comments: comments, deletes: deletes }
 }
 
 if (typeof module !== "undefined") {
@@ -643,6 +753,12 @@ if (typeof module !== "undefined") {
     sanitizeNostrFetch: sanitizeNostrFetch,
     dedupNostrPairs: dedupNostrPairs,
     buildNostrPublish: buildNostrPublish,
+    sanitizeDeleted: sanitizeDeleted,
+    addTombstone: addTombstone,
+    mergeDeleted: mergeDeleted,
+    isDeleted: isDeleted,
+    filterDeletedNotes: filterDeletedNotes,
+    pruneDeleted: pruneDeleted,
     addComment: addComment,
     setShared: setShared,
     setColor: setColor,

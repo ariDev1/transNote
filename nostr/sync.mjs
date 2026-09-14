@@ -13,9 +13,11 @@
 //
 //   node sync.mjs publish --key-file <path> --relays <csv> --in <publish.json> --recipients <csv>
 //     Publishes ENCRYPTED (NIP-44 v2) note/comment events, one copy per
-//     recipient. Prints {"results":[{"ref","id","ok"}]}.
+//     recipient, plus NIP-09 kind-5 deletions for tombstoned notes.
+//     Prints {"results":[{"ref","id","ok"}]}.
 //     publish.json: { notes:[{ref,d,title,body,updatedAt}],
-//                     comments:[{ref,noteD,parentEventId,text}] }
+//                     comments:[{ref,noteD,parentEventId,text}],
+//                     deletes:[{ref,noteId,deletedAt}] }
 //     --recipients: comma-separated hex or npub pubkeys. Your own pubkey is
 //     always added automatically so a second device of yours can fetch.
 //     Add --public ONLY to also publish the old legacy PUBLIC format
@@ -24,7 +26,9 @@
 //   node sync.mjs fetch --key-file <path> --relays <csv> --allow-list <csv> --since <unix> --limit <n> --out <f>
 //     Queries relays for events addressed to YOU (p-tag = your pubkey),
 //     decrypts them, keeps only authors on your allow-list (or yourself).
-//     Prints {"notes":N,"pairs":M} and writes {notes:[...],pairs:[...]} to <f>.
+//     Also collects NIP-09 kind-5 deletions so deleted notes stay deleted.
+//     Prints {"notes":N,"pairs":M,"deleted":D} and writes
+//     {notes:[...],pairs:[...],deleted:[...]} to <f>.
 //     Add --include-public to also read legacy PUBLIC events.
 //
 // Event design (encrypted, default):
@@ -41,8 +45,10 @@
 //            `ref` as the comment id, making republishes idempotent.
 // Relays see ciphertext + sender/recipient pubkeys only — NOT the text.
 // Qualification happens on receipt: only allow-listed authors (or yourself)
-// are merged. Removing someone stops FUTURE notes, it does not delete old
-// ciphertext from relays.
+// are merged. Deletions are NIP-09 kind-5 events: removing someone stops
+// FUTURE notes, and deleting a note publishes kind-5 tombstones so every
+// device filters it on the next fetch (old ciphertext may remain on relays
+// but is never shown again).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
@@ -50,6 +56,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey, nip19, nip44, SimplePoo
 
 const APP_TAG = "transnote";
 const NOTE_KIND = 30078;
+const DELETE_KIND = 5;
 const DEFAULT_RELAYS = [
   "wss://relay.damus.io",
   "wss://nos.lol",
@@ -254,6 +261,35 @@ async function cmdPublish(a) {
         results.push({ ref: c.ref, to: r.slice(0, 8), id: ev.id, ok });
       }
     }
+    // NIP-09 deletions: one kind-5 per deleted note per recipient.
+    // Plaintext `i` tag carries the noteId (content is empty by spec) so
+    // fetch can filter without decrypting. `a` references the addressable
+    // note event for relays that honor NIP-09; `k` names the deleted kind.
+    for (const del of job.deletes || []) {
+      const noteId = String(del.noteId || del.d || "");
+      if (!noteId) continue;
+      const when = Math.floor(new Date(del.deletedAt || Date.now()).getTime() / 1000) || Math.floor(Date.now() / 1000);
+      for (const r of recipients) {
+        const ev = finalizeEvent(
+          {
+            kind: DELETE_KIND,
+            created_at: when,
+            tags: [
+              ["a", `${NOTE_KIND}:${myHex}:${noteId}:${r}`],
+              ["k", String(NOTE_KIND)],
+              ["i", noteId],
+              ["p", r],
+              ["t", APP_TAG],
+              ["client", "transnote"],
+            ],
+            content: "",
+          },
+          sk,
+        );
+        const ok = await publishToRelays(pool, relays, ev);
+        results.push({ ref: del.ref || `del-${noteId}`, to: r.slice(0, 8), id: ev.id, ok });
+      }
+    }
   });
   console.log(JSON.stringify({ results }));
 }
@@ -274,12 +310,16 @@ async function cmdFetch(a) {
   const includePublic = a["include-public"] !== undefined;
   const notes = [];
   const pairs = [];
+  const deleted = [];
+  const deletedByNote = new Map();
   let newest = since;
   await withPool(relays, async (pool) => {
     // Only events addressed to me — public discovery of ciphertext,
-    // private content. Sender must be allow-listed (or me).
+    // private content. Sender must be allow-listed (or me). Kind-5
+    // deletions ride the same addressed channel so they cannot be
+    // forged for someone else's notes (see deleter check below).
     const addressedFilter = {
-      kinds: [NOTE_KIND, 1],
+      kinds: [NOTE_KIND, 1, DELETE_KIND],
       "#p": [myHex],
       "#t": [APP_TAG],
       limit,
@@ -290,7 +330,7 @@ async function cmdFetch(a) {
 
     if (includePublic) {
       const publicFilter = {
-        kinds: [NOTE_KIND, 1],
+        kinds: [NOTE_KIND, 1, DELETE_KIND],
         "#t": [APP_TAG],
         limit,
       };
@@ -305,6 +345,29 @@ async function cmdFetch(a) {
       if (typeof ev.created_at === "number" && ev.created_at > newest) newest = ev.created_at;
       const author = String(ev.pubkey || "").toLowerCase();
       if (!isAllowedAuthor(author, allowHexSet, myHex)) continue;
+      // NIP-09 deletions: plaintext, no decryption needed. The `i` tag
+      // carries the noteId; `a` tags reference addressable note events
+      // (30078:<author>:<noteId>:<recipient>). Recorded per note with the
+      // deleter so fetch can enforce author-only deletion below.
+      if (ev.kind === DELETE_KIND) {
+        const ids = new Set();
+        for (const t of ev.tags || []) {
+          if (!Array.isArray(t) || t.length < 2) continue;
+          if (t[0] === "i" && String(t[1] || "").trim() !== "") ids.add(String(t[1]).split(":")[0].trim());
+          else if (t[0] === "a") {
+            const parts = String(t[1] || "").split(":");
+            // ["30078", authorHex, noteId, recipientHex]
+            if (parts.length >= 3 && parts[0] === String(NOTE_KIND) && parts[2].trim() !== "") ids.add(parts[2].trim());
+          } else if (t[0] === "d" && String(t[1] || "").trim() !== "") ids.add(String(t[1]).split(":")[0].trim());
+        }
+        const at = new Date((ev.created_at || 0) * 1000).toISOString();
+        for (const noteId of ids) {
+          if (!deletedByNote.has(noteId)) deletedByNote.set(noteId, []);
+          deletedByNote.get(noteId).push(author);
+          deleted.push({ noteId, author, deletedAt: at, eventId: ev.id });
+        }
+        continue;
+      }
       const enc = tag(ev, "enc");
       if (enc === "nip44-v2") {
         let clear;
@@ -369,12 +432,30 @@ async function cmdFetch(a) {
         }
       }
     }
+    // Delete-wins, author-only: drop a note/pair only when the deleter is
+    // the note's author or ourselves (second device). A third party cannot
+    // delete someone else's notes.
+    const deletersOf = (noteId) => deletedByNote.get(noteId) || [];
+    const isDeletedNote = (noteId, authorHex) => {
+      const a = String(authorHex || "").toLowerCase();
+      return deletersOf(noteId).some((d) => d === a || d === myHex);
+    };
+    const keptNotes = notes.filter((n) => !isDeletedNote(n.id, n.authorHex));
+    const keptPairs = pairs.filter((p) => {
+      const host = keptNotes.find((n) => n.id === p.noteId) || notes.find((n) => n.id === p.noteId);
+      if (!host) return !deletersOf(p.noteId).some((d) => d === myHex);
+      return !isDeletedNote(p.noteId, host.authorHex);
+    });
+    notes.length = 0;
+    notes.push(...keptNotes);
+    pairs.length = 0;
+    pairs.push(...keptPairs);
   });
   if (a.out) {
     mkdirSync(dirname(a.out), { recursive: true });
-    writeFileSync(a.out, JSON.stringify({ notes, pairs, newest }, null, 1) + "\n");
+    writeFileSync(a.out, JSON.stringify({ notes, pairs, deleted, newest }, null, 1) + "\n");
   }
-  console.log(JSON.stringify({ notes: notes.length, pairs: pairs.length, newest }));
+  console.log(JSON.stringify({ notes: notes.length, pairs: pairs.length, deleted: deleted.length, newest }));
 }
 
 const [cmd, ...rest] = process.argv.slice(2);

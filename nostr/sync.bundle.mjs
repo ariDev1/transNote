@@ -7459,6 +7459,7 @@ async function validateEvent2(event, url, method, body) {
 // nostr/sync.mjs
 var APP_TAG = "transnote";
 var NOTE_KIND = 30078;
+var DELETE_KIND = 5;
 var DEFAULT_RELAYS = [
   "wss://relay.damus.io",
   "wss://nos.lol",
@@ -7649,6 +7650,31 @@ async function cmdPublish(a2) {
         results.push({ ref: c.ref, to: r.slice(0, 8), id: ev.id, ok });
       }
     }
+    for (const del of job.deletes || []) {
+      const noteId = String(del.noteId || del.d || "");
+      if (!noteId) continue;
+      const when = Math.floor(new Date(del.deletedAt || Date.now()).getTime() / 1e3) || Math.floor(Date.now() / 1e3);
+      for (const r of recipients) {
+        const ev = finalizeEvent(
+          {
+            kind: DELETE_KIND,
+            created_at: when,
+            tags: [
+              ["a", `${NOTE_KIND}:${myHex}:${noteId}:${r}`],
+              ["k", String(NOTE_KIND)],
+              ["i", noteId],
+              ["p", r],
+              ["t", APP_TAG],
+              ["client", "transnote"]
+            ],
+            content: ""
+          },
+          sk
+        );
+        const ok = await publishToRelays(pool, relays, ev);
+        results.push({ ref: del.ref || `del-${noteId}`, to: r.slice(0, 8), id: ev.id, ok });
+      }
+    }
   });
   console.log(JSON.stringify({ results }));
 }
@@ -7667,10 +7693,12 @@ async function cmdFetch(a2) {
   const includePublic = a2["include-public"] !== void 0;
   const notes = [];
   const pairs = [];
+  const deleted = [];
+  const deletedByNote = /* @__PURE__ */ new Map();
   let newest = since;
   await withPool(relays, async (pool) => {
     const addressedFilter = {
-      kinds: [NOTE_KIND, 1],
+      kinds: [NOTE_KIND, 1, DELETE_KIND],
       "#p": [myHex],
       "#t": [APP_TAG],
       limit
@@ -7679,7 +7707,7 @@ async function cmdFetch(a2) {
     let events = await pool.querySync(relays, addressedFilter);
     if (includePublic) {
       const publicFilter = {
-        kinds: [NOTE_KIND, 1],
+        kinds: [NOTE_KIND, 1, DELETE_KIND],
         "#t": [APP_TAG],
         limit
       };
@@ -7693,6 +7721,24 @@ async function cmdFetch(a2) {
       if (typeof ev.created_at === "number" && ev.created_at > newest) newest = ev.created_at;
       const author = String(ev.pubkey || "").toLowerCase();
       if (!isAllowedAuthor(author, allowHexSet, myHex)) continue;
+      if (ev.kind === DELETE_KIND) {
+        const ids = /* @__PURE__ */ new Set();
+        for (const t of ev.tags || []) {
+          if (!Array.isArray(t) || t.length < 2) continue;
+          if (t[0] === "i" && String(t[1] || "").trim() !== "") ids.add(String(t[1]).split(":")[0].trim());
+          else if (t[0] === "a") {
+            const parts = String(t[1] || "").split(":");
+            if (parts.length >= 3 && parts[0] === String(NOTE_KIND) && parts[2].trim() !== "") ids.add(parts[2].trim());
+          } else if (t[0] === "d" && String(t[1] || "").trim() !== "") ids.add(String(t[1]).split(":")[0].trim());
+        }
+        const at = new Date((ev.created_at || 0) * 1e3).toISOString();
+        for (const noteId of ids) {
+          if (!deletedByNote.has(noteId)) deletedByNote.set(noteId, []);
+          deletedByNote.get(noteId).push(author);
+          deleted.push({ noteId, author, deletedAt: at, eventId: ev.id });
+        }
+        continue;
+      }
       const enc = tag(ev, "enc");
       if (enc === "nip44-v2") {
         let clear;
@@ -7755,12 +7801,27 @@ async function cmdFetch(a2) {
         }
       }
     }
+    const deletersOf = (noteId) => deletedByNote.get(noteId) || [];
+    const isDeletedNote = (noteId, authorHex) => {
+      const a3 = String(authorHex || "").toLowerCase();
+      return deletersOf(noteId).some((d) => d === a3 || d === myHex);
+    };
+    const keptNotes = notes.filter((n) => !isDeletedNote(n.id, n.authorHex));
+    const keptPairs = pairs.filter((p) => {
+      const host = keptNotes.find((n) => n.id === p.noteId) || notes.find((n) => n.id === p.noteId);
+      if (!host) return !deletersOf(p.noteId).some((d) => d === myHex);
+      return !isDeletedNote(p.noteId, host.authorHex);
+    });
+    notes.length = 0;
+    notes.push(...keptNotes);
+    pairs.length = 0;
+    pairs.push(...keptPairs);
   });
   if (a2.out) {
     mkdirSync(dirname(a2.out), { recursive: true });
-    writeFileSync(a2.out, JSON.stringify({ notes, pairs, newest }, null, 1) + "\n");
+    writeFileSync(a2.out, JSON.stringify({ notes, pairs, deleted, newest }, null, 1) + "\n");
   }
-  console.log(JSON.stringify({ notes: notes.length, pairs: pairs.length, newest }));
+  console.log(JSON.stringify({ notes: notes.length, pairs: pairs.length, deleted: deleted.length, newest }));
 }
 var [cmd, ...rest] = process.argv.slice(2);
 var a = args(rest);

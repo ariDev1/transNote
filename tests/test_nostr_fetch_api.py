@@ -16,7 +16,13 @@ class NostrFetchApiTests(unittest.TestCase):
 
     def test_addressed_query_combines_supported_kinds(self):
         self.assertIn(
-            "kinds: [NOTE_KIND, 1]",
+            "kinds: [NOTE_KIND, 1, DELETE_KIND]",
+            self.source,
+        )
+
+    def test_delete_kind_is_nip09(self):
+        self.assertIn(
+            "const DELETE_KIND = 5;",
             self.source,
         )
 

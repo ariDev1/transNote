@@ -629,6 +629,12 @@ Panel {
   property var peerNotes: []    // merged shared notes from folder peers
   property var nostrPeerNotes: [] // shared notes from internet (Nostr fetch)
   property var displayNotes: [] // sorted union shown in the panel
+  // Deletion tombstones { noteId: deletedAtIso } — persisted locally and
+  // published in the LAN snapshot + as NIP-09 kind-5 on Nostr. Delete-wins:
+  // every merge path filters against them so deleted notes never resurrect.
+  property var deletedIds: ({})
+  // Tombstones not yet uploaded to Nostr (noteIds). Flushed on publish.
+  property var pendingDeletes: []
   // My comments on peers' notes, published in my snapshot so their authors
   // merge them in: [{ noteId, comment }]. Persisted in the local file.
   property var outbox: []
@@ -748,7 +754,7 @@ Panel {
   }
   function deleteCursorNote() {
     var n = cursorNote()
-    if (n && isLocalNote(n.id)) deleteNote(n.id)
+    if (n && isDeletable(n)) deleteNote(n.id)
   }
   function cursorKey(t) {
     if (root.panelView !== "notes") return
@@ -809,6 +815,7 @@ Panel {
 
   function refreshDisplay() {
     var union = (localNotes || []).concat(peerNotes || []).concat(nostrPeerNotes || [])
+    union = Store.filterDeletedNotes(union, deletedIds)
     displayNotes = Store.sortNotes(union.filter(function (n) { return !!n }))
     trackFreshness()
   }
@@ -822,9 +829,9 @@ Panel {
     // each snapshot loads). Rebuild the union defensively anyway.
     var mine = {}
     localNotes.forEach(function (n) { if (n) mine[n.id] = true })
-    var fresh = (peerNotes || []).filter(function (n) { return n && !mine[n.id] })
+    var fresh = (peerNotes || []).filter(function (n) { return n && !mine[n.id] && !Store.isDeleted(deletedIds, n.id) })
     peerNotes = fresh
-    var freshNostr = (nostrPeerNotes || []).filter(function (n) { return n && !mine[n.id] })
+    var freshNostr = (nostrPeerNotes || []).filter(function (n) { return n && !mine[n.id] && !Store.isDeleted(deletedIds, n.id) })
     nostrPeerNotes = freshNostr
     refreshDisplay()
   }
@@ -864,7 +871,7 @@ Panel {
   function writeSnapshot() {
     if (!syncConfigured || syncSnapshotPath === "") return
     var shared = localNotes.filter(function (n) { return n && n.shared === true })
-    var snapshot = JSON.stringify({ version: 1, deviceId: myId, updatedAt: Store.nowIso(), notes: shared, noteComments: outbox }, null, 2) + "\n"
+    var snapshot = JSON.stringify({ version: 2, deviceId: myId, updatedAt: Store.nowIso(), notes: shared, noteComments: outbox, deletedIds: deletedIds }, null, 2) + "\n"
     syncSnapshotFile.setText(snapshot)
     mirrorSharedAttachments()
   }
@@ -900,7 +907,7 @@ Panel {
   }
 
   function persist() {
-    var payload = JSON.stringify({ version: 1, deviceId: myId, notes: localNotes, outbox: outbox }, null, 2) + "\n"
+    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds }, null, 2) + "\n"
     // Rotate the previous state aside first (skipped on the very first save
     // when nothing was loaded yet) — never overwrites the backup with empty.
     if (lastLocalRaw !== "") notesBakFile.setText(lastLocalRaw)
@@ -908,8 +915,9 @@ Panel {
     lastLocalRaw = payload
     writeSnapshot()
     // Internet publish queue for the built-in sync: shared notes + outbox
-    // comments. sync.mjs encrypts one copy per --recipients pubkey on publish.
-    var job = Store.buildNostrPublish(localNotes, outbox)
+    // comments + deletion tombstones. sync.mjs encrypts one copy per
+    // --recipients pubkey on publish.
+    var job = Store.buildNostrPublish(localNotes, outbox, deletedIds, pendingDeletes)
     nostrPublishFile.setText(JSON.stringify(job, null, 2) + "\n")
     refreshDisplay()
     secureFiles()
@@ -919,6 +927,7 @@ Panel {
     lastLocalRaw = String(raw || "")
     var notes = []
     var box = []
+    var tomb = ({})
     try {
       var parsed = JSON.parse(String(raw || ""))
       var arr = parsed && Array.isArray(parsed.notes) ? parsed.notes : (Array.isArray(parsed) ? parsed : [])
@@ -927,17 +936,22 @@ Panel {
         if (clean) notes.push(clean)
       })
       box = Store.sanitizeOutbox(parsed && parsed.outbox)
+      tomb = Store.sanitizeDeleted(parsed && (parsed.deletedIds || parsed.deleted))
     } catch (e) { console.warn("transnote", "Ignoring bad notes file", e) }
-    localNotes = notes
-    outbox = box
+    localNotes = Store.filterDeletedNotes(notes, tomb)
+    outbox = box.filter(function (entry) { return entry && !Store.isDeleted(tomb, entry.noteId) })
+    deletedIds = tomb
+    // Pending Nostr deletes = all tombstones (reconciled after publish).
+    pendingDeletes = Object.keys(tomb)
     localLoaded = true
     mergePeers()
   }
 
-  // Returns { notes: [...], pairs: [{ noteId, comment }] }.
+  // Returns { notes: [...], pairs: [{ noteId, comment }], deleted: {...} }.
   function loadPeerSnapshot(raw) {
     var out = []
     var pairs = []
+    var tomb = {}
     try {
       var parsed = JSON.parse(String(raw || ""))
       var arr = parsed && Array.isArray(parsed.notes) ? parsed.notes : []
@@ -949,20 +963,32 @@ Panel {
             && (clean.author === root.myId || Store.isQualified(clean.author, allowList))) out.push(clean)
       })
       pairs = Store.sanitizeOutbox(parsed && parsed.noteComments)
+      tomb = Store.sanitizeDeleted(parsed && (parsed.deletedIds || parsed.deleted))
     } catch (e) { /* ignore bad peer files */ }
-    return { notes: out, pairs: pairs }
+    return { notes: out, pairs: pairs, deleted: tomb }
   }
 
   function rebuildPeerNotes() {
     var all = []
     var pairs = []
+    var peerTomb = {}
     Object.keys(peerSnapshots).forEach(function (k) {
       var s = peerSnapshots[k]
       if (s) {
         all = all.concat(s.notes || [])
         pairs = pairs.concat(s.pairs || [])
+        peerTomb = Store.mergeDeleted(peerTomb, s.deleted || {})
       }
     })
+    // Delete-wins: merge peer tombstones into local state so a stale
+    // snapshot can never resurrect a deleted note, then filter everything.
+    var effective = Store.mergeDeleted(deletedIds, peerTomb)
+    if (JSON.stringify(effective) !== JSON.stringify(deletedIds)) {
+      deletedIds = effective
+      pendingDeletes = Object.keys(effective)
+    }
+    all = Store.filterDeletedNotes(all, effective)
+    pairs = pairs.filter(function (entry) { return entry && !Store.isDeleted(effective, entry.noteId) })
     // De-duplicate by note id, newest first; drop notes I authored (mine win).
     var mine = {}
     localNotes.forEach(function (n) { if (n) mine[n.id] = true })
@@ -972,7 +998,11 @@ Panel {
       if (!byId[n.id] || n.updatedAt > byId[n.id].updatedAt) byId[n.id] = n
     })
     peerNotes = Object.keys(byId).map(function (k) { return byId[k] })
-    foreignComments = Store.mergeForeignComments(foreignComments, pairs, allowList, myId)
+    var fc = {}
+    Object.keys(foreignComments || {}).forEach(function (k) {
+      if (!Store.isDeleted(effective, k)) fc[k] = foreignComments[k]
+    })
+    foreignComments = Store.mergeForeignComments(fc, pairs, allowList, myId)
     var pruned = Store.pruneOutbox(outbox, localNotes, allPeerNotes())
     if (JSON.stringify(pruned) !== JSON.stringify(outbox)) {
       outbox = pruned
@@ -986,15 +1016,20 @@ Panel {
 
   // Internet fetch output (written by the built-in sync, read back here).
   // Already decrypted + author-filtered by sync.mjs; re-filter here too so
-  // removing someone hides them immediately.
+  // removing someone hides them immediately. Relay tombstones (kind-5)
+  // merge into local deletedIds — delete-wins, no resurrection.
   function loadNostrFetch(raw) {
     root.nostrFetchRaw = String(raw || "")
-    var parsed = Store.sanitizeNostrFetch(root.nostrFetchRaw, nostrAllowList, root.myHex)
+    var parsed = Store.sanitizeNostrFetch(root.nostrFetchRaw, nostrAllowList, root.myHex, deletedIds)
+    if (parsed.tombstones && JSON.stringify(parsed.tombstones) !== JSON.stringify(deletedIds)) {
+      deletedIds = Store.mergeDeleted(deletedIds, parsed.tombstones)
+      pendingDeletes = Object.keys(deletedIds)
+    }
     var mine = {}
     localNotes.forEach(function (n) { if (n) mine[n.id] = true })
     var folderIds = {}
     ;(peerNotes || []).forEach(function (n) { if (n) folderIds[n.id] = true })
-    var fresh = parsed.notes.filter(function (n) { return n && !mine[n.id] && !folderIds[n.id] })
+    var fresh = parsed.notes.filter(function (n) { return n && !mine[n.id] && !folderIds[n.id] && !Store.isDeleted(deletedIds, n.id) })
     nostrPeerNotes = fresh
     // Accept comments from hex-self too (second device of same user).
     var allowWithSelf = (allowList || []).concat(root.myHex ? [root.myHex] : [])
@@ -1194,10 +1229,33 @@ Panel {
   }
 
   function deleteNote(id) {
-    removeAttachDirs(id, true)
-    localNotes = localNotes.filter(function (n) { return n && n.id !== id })
-    if (selectedNoteId === id) selectedNoteId = ""
+    var clean = Store.normalizeText(id)
+    if (clean === "") return
+    removeAttachDirs(clean, true)
+    localNotes = localNotes.filter(function (n) { return n && n.id !== clean })
+    peerNotes = (peerNotes || []).filter(function (n) { return n && n.id !== clean })
+    nostrPeerNotes = (nostrPeerNotes || []).filter(function (n) { return n && n.id !== clean })
+    // Tombstone first: delete-wins on every future merge (LAN + Nostr).
+    deletedIds = Store.addTombstone(deletedIds, clean)
+    if (pendingDeletes.indexOf(clean) === -1) pendingDeletes = pendingDeletes.concat([clean])
+    // Drop comments/outbox/unread state for the deleted note.
+    outbox = (outbox || []).filter(function (entry) { return entry && entry.noteId !== clean })
+    if (foreignComments && foreignComments[clean]) {
+      var fc = {}
+      for (var k in foreignComments) { if (k !== clean) fc[k] = foreignComments[k] }
+      foreignComments = fc
+    }
+    if (selectedNoteId === clean) selectedNoteId = ""
+    if (unreadIds && unreadIds[clean]) {
+      var unread = {}
+      for (var u in unreadIds) { if (u !== clean) unread[u] = unreadIds[u] }
+      unreadIds = unread
+    }
     persist()
+    // Upload the kind-5 deletion immediately; persist() already queued it.
+    // Guard mirrors runSyncCycle: no Nostr recipients or setup incomplete
+    // means LAN-only mode, where persist()+writeSnapshot() is sufficient.
+    if (setupStage === "ready" && Store.effectiveNostrAllow(allowList, friends).length > 0) startPublish()
   }
 
   function toggleShare(id) {
@@ -1227,6 +1285,15 @@ Panel {
     for (var i = 0; i < localNotes.length; i++) {
       if (localNotes[i] && localNotes[i].id === id) return true
     }
+    return false
+  }
+  // Deletable: own LAN notes plus own Nostr copies (authorHex == myHex).
+  // Peer notes stay author-gated — only the author can tombstone them.
+  function isDeletable(note) {
+    if (!note || !note.id) return false
+    if (isLocalNote(note.id)) return true
+    if (note.author === myId) return true
+    if (myHex !== "" && Store.normalizeText(note.author).toLowerCase() === Store.normalizeText(myHex).toLowerCase()) return true
     return false
   }
   // Per-note attach-row toggle (paperclip in the comment row). Closed by
@@ -2101,7 +2168,7 @@ Panel {
               onClicked: root.copyNoteFull(note)
             }
             Button {
-              visible: root.isLocalNote(note.id)
+              visible: root.isDeletable(note)
               Layout.preferredWidth: Style.space(28)
               Layout.preferredHeight: Style.space(28)
               iconText: String.fromCodePoint(0xF0194)
