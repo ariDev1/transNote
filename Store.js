@@ -366,6 +366,29 @@ function pruneDeleted(deletedMap, maxAgeDays) {
   return out
 }
 
+// Local-only hides: dismissing a peer's note hides it on this machine only
+// (never published, never affects others). Stored as a plain id array in
+// the local file, capped so it stays small.
+var MAX_HIDDEN = 1000
+
+function sanitizeHidden(raw) {
+  var out = []
+  var seen = {}
+  var arr = Array.isArray(raw) ? raw : []
+  for (var i = 0; i < arr.length; i++) {
+    var entry = arr[i]
+    var id
+    if (typeof entry === "string") id = normalizeText(entry)
+    else if (entry && typeof entry === "object" && entry.id !== undefined) id = normalizeText(entry.id)
+    else continue
+    if (id === "" || seen[id]) continue
+    seen[id] = true
+    out.push(id)
+    if (out.length >= MAX_HIDDEN) break
+  }
+  return out
+}
+
 // Hex recipients among the allow-list — the only entries usable for
 // encrypted Nostr publish. Device ids are for folder sync and ignored here.
 function hexRecipients(allowList) {
@@ -754,6 +777,8 @@ if (typeof module !== "undefined") {
     dedupNostrPairs: dedupNostrPairs,
     buildNostrPublish: buildNostrPublish,
     sanitizeDeleted: sanitizeDeleted,
+    sanitizeHidden: sanitizeHidden,
+    MAX_HIDDEN: MAX_HIDDEN,
     addTombstone: addTombstone,
     mergeDeleted: mergeDeleted,
     isDeleted: isDeleted,

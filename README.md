@@ -239,6 +239,26 @@ Comments follow the same synchronization path as the note:
 
 Local comments are stored with the local note state.
 
+## Delete, unshare, hide
+
+Three different actions, three different scopes:
+
+- **Delete** (trash icon, or `x` on a deletable note): deletes the note
+  **everywhere** — your own notes plus your own Internet copies. A delete
+  marker is published to folder peers and to the Internet relays (NIP-09),
+  so the note stays deleted after updates, restarts and re-fetches.
+- **Unshare** (share icon on a shared note): keeps the note locally but
+  stops sharing it. Peers drop their copy the same way as for delete; if
+  you share it again later, the live note wins and reappears for peers.
+- **Hide** (eye-off icon, or `x` on someone else's note): dismisses a
+  peer's note **on this machine only**. Nobody else is affected. Hidden
+  notes are listed with an "Unhide all" button at the top of the Notes
+  view.
+
+Renaming the machine re-signs your local notes to the new name
+automatically (the stale `<old-name>.json` snapshot is removed) — but
+peers must allow-list the new name afterwards.
+
 ## Keyboard controls
 
 TransNote supports keyboard-first operation.
@@ -250,7 +270,7 @@ TransNote supports keyboard-first operation.
 | `Enter` | Expand selected note |
 | `c` | Copy note content |
 | `s` | Share or unshare |
-| `x` | Delete your own note |
+| `x` | Delete deletable note (hide someone else's) |
 | `a` | Open attachment controls |
 | `t` | Change note tint |
 | `/` | Focus note composer |

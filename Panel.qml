@@ -311,8 +311,7 @@ Panel {
     var rec = (size >= 0 && sha !== "" && cleanName !== "") ? Store.createAttachment(cleanName, size, sha, attId) : null
     // Stale sidecar of THIS run only (never another run's files).
     if (!rec || rec.id !== attId) {
-      gcProcess.command = ["bash", "-c", "rm -f " + shellQuote(dst) + " 2>/dev/null; true"]
-      gcProcess.running = true
+      queueGc(["bash", "-c", "rm -f " + shellQuote(dst) + " 2>/dev/null; true"])
       setAttachBusy(noteId, false)
       setAttachMsg(noteId, exitCode === 0 ? "Couldn't stage that file." : "Attach failed — try again.")
       return
@@ -336,7 +335,30 @@ Panel {
   function removeAttachDirs(noteId, includeSync) {
     var dirs = [ownAttachSubdir(noteId)]
     if (includeSync && syncAttachSubdir(noteId) !== "") dirs.push(syncAttachSubdir(noteId))
-    gcProcess.command = ["bash", "-c", "rm -rf " + dirs.map(shellQuote).join(" ") + " 2>/dev/null; true"]
+    queueGc(["bash", "-c", "rm -rf " + dirs.map(shellQuote).join(" ") + " 2>/dev/null; true"])
+  }
+  // Fire-and-forget sidecar cleanup queue: gcProcess is a single shared
+  // slot, so rapid consecutive deletes must queue instead of overwriting
+  // each other's command (last-wins would orphan earlier sidecars).
+  property var pendingGc: []
+  function queueGc(cmd) {
+    if (!cmd) return
+    pendingGc = (pendingGc || []).concat([cmd])
+    if (!gcProcess.running) flushGc()
+  }
+  function flushGc() {
+    if (gcProcess.running) return
+    var q = pendingGc || []
+    if (q.length === 0) return
+    pendingGc = []
+    if (q.length === 1) {
+      gcProcess.command = q[0]
+    } else {
+      // Each queued entry is ["bash", "-c", <script>]: run the scripts in
+      // one shell so no cleanup is lost when deletes happen in a burst.
+      var scripts = q.map(function (c) { return String(c[2] || "true") })
+      gcProcess.command = ["bash", "-c", scripts.join("\n") + "\ntrue"]
+    }
     gcProcess.running = true
   }
   // Remove one attachment: drop the record, delete both sidecars.
@@ -353,10 +375,9 @@ Panel {
         })
         localNotes[i].attachments = kept
         gone.forEach(function (g) {
-          gcProcess.command = ["bash", "-c",
+          queueGc(["bash", "-c",
             "rm -f " + shellQuote(ownAttachSubdir(noteId) + "/" + g.id + "-" + g.name)
-            + " " + shellQuote(syncAttachSubdir(noteId) + "/" + g.id + "-" + g.name) + " 2>/dev/null; true"]
-          gcProcess.running = true
+            + " " + shellQuote(syncAttachSubdir(noteId) + "/" + g.id + "-" + g.name) + " 2>/dev/null; true"])
         })
         touchLocalNotes()
         break
@@ -442,10 +463,11 @@ Panel {
   // notes displayed. Updated by rebuildPeerNotes() on every peer load.
   property string peerDebug: ""
   readonly property string omarchyBin: (Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy") + "/bin/omarchy"
-  // Authors of my existing local notes that differ from the drafted device
-  // name. Renaming orphans them: Share/Delete buttons hide (they check
-  // note.author === myId) and peers must allow-list the OLD name, since
-  // qualification matches note authors, not snapshot file names.
+  // Authors of existing local notes that differ from the drafted device
+  // name. Renaming re-signs them to the new name automatically (see
+  // loadLocal migration + migrateAuthors), so buttons keep working — but
+  // peers must allow-list the NEW name afterwards, since qualification
+  // matches note authors, not snapshot file names.
   readonly property var setupForeignAuthors: {
     var seen = {}
     var out = []
@@ -635,6 +657,9 @@ Panel {
   property var deletedIds: ({})
   // Tombstones not yet uploaded to Nostr (noteIds). Flushed on publish.
   property var pendingDeletes: []
+  // Local-only hides [noteId]: dismissing a peer's note hides it on this
+  // machine only (never published, never affects others).
+  property var hiddenIds: []
   // My comments on peers' notes, published in my snapshot so their authors
   // merge them in: [{ noteId, comment }]. Persisted in the local file.
   property var outbox: []
@@ -692,9 +717,12 @@ Panel {
   function cycleColor(noteId) {
     for (var i = 0; i < localNotes.length; i++) {
       if (localNotes[i] && localNotes[i].id === noteId) {
+        if (Store.normalizeText(localNotes[i].author) !== Store.normalizeText(myId)) {
+          localNotes[i].author = Store.normalizeText(myId)
+        }
         var cur = Store.sanitizeColor(localNotes[i].color)
         var at = colorCycle.indexOf(cur)
-        Store.setColor(localNotes[i], colorCycle[(at + 1) % colorCycle.length], myId)
+        Store.setColor(localNotes[i], colorCycle[(at + 1) % colorCycle.length], "")
         touchLocalNotes()
         break
       }
@@ -703,8 +731,9 @@ Panel {
   }
   // Keyboard navigation (Omarchy idiom: PanelKeyCatcher + note cursor).
   // j/k/arrows move, Enter/Space expands, c copies, s shares, x deletes
-  // own notes, a opens the attach row, / jumps to compose. Any text field
-  // focused sets editing (catcher passes keys through instead).
+  // deletable notes (hides peers' notes), a opens the attach row, /
+  // jumps to compose. Any text field focused sets editing (catcher passes
+  // keys through instead).
   property bool editing: false
   property bool cursorActive: false
   property int noteCursor: -1
@@ -754,7 +783,9 @@ Panel {
   }
   function deleteCursorNote() {
     var n = cursorNote()
-    if (n && isDeletable(n)) deleteNote(n.id)
+    if (!n) return
+    if (isDeletable(n)) deleteNote(n.id)
+    else hideNote(n.id)
   }
   function cursorKey(t) {
     if (root.panelView !== "notes") return
@@ -763,7 +794,7 @@ Panel {
       if (n) copyNoteFull(n)
     } else if (t === "s") {
       var m = cursorNote()
-      if (m && m.author === myId) toggleShare(m.id)
+      if (m && isLocalNote(m.id)) toggleShare(m.id)
     } else if (t === "a") {
       var k = cursorNote()
       if (k && isLocalNote(k.id)) {
@@ -772,7 +803,7 @@ Panel {
       }
     } else if (t === "t") {
       var c2 = cursorNote()
-      if (c2 && c2.author === myId) cycleColor(c2.id)
+      if (c2 && isLocalNote(c2.id)) cycleColor(c2.id)
     } else if (t === "/") {
       if (noteTitleField) noteTitleField.forceActiveFocus()
     }
@@ -812,11 +843,17 @@ Panel {
   // Guards persist-on-config-change so a settings update arriving before
   // the first load can never clobber notes.json with an empty array.
   property bool localLoaded: false
+  // Set when the local file failed to load (corrupt/locked): persist()
+  // then skips the local-file write so a transient read failure can never
+  // wipe notes.json — memory is kept until the next successful load.
+  property bool localLoadFailed: false
 
   function refreshDisplay() {
     var union = (localNotes || []).concat(peerNotes || []).concat(nostrPeerNotes || [])
     union = Store.filterDeletedNotes(union, deletedIds)
-    displayNotes = Store.sortNotes(union.filter(function (n) { return !!n }))
+    var hidden = {}
+    ;(hiddenIds || []).forEach(function (id) { if (id) hidden[Store.normalizeText(id)] = true })
+    displayNotes = Store.sortNotes(union.filter(function (n) { return !!n && !hidden[n.id] }))
     trackFreshness()
   }
 
@@ -868,8 +905,15 @@ Panel {
   // Snapshot-only write: publishes shared notes WITHOUT touching
   // notes.json. Used when sync turns on, so configuring Setup can never
   // rewind the local notes file (it only ever announces current memory).
+  // Remembers the last announced name: after a device rename the stale
+  // <old-name>.json is removed so it can never resurface as a "peer".
+  property string lastSnapshotId: ""
   function writeSnapshot() {
     if (!syncConfigured || syncSnapshotPath === "") return
+    if (lastSnapshotId !== "" && lastSnapshotId !== myId) {
+      queueGc(["bash", "-c", "rm -f " + shellQuote(syncDir + "/" + lastSnapshotId + ".json") + " 2>/dev/null; true"])
+    }
+    lastSnapshotId = myId
     var shared = localNotes.filter(function (n) { return n && n.shared === true })
     var snapshot = JSON.stringify({ version: 2, deviceId: myId, updatedAt: Store.nowIso(), notes: shared, noteComments: outbox, deletedIds: deletedIds }, null, 2) + "\n"
     syncSnapshotFile.setText(snapshot)
@@ -907,12 +951,17 @@ Panel {
   }
 
   function persist() {
-    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds }, null, 2) + "\n"
-    // Rotate the previous state aside first (skipped on the very first save
-    // when nothing was loaded yet) — never overwrites the backup with empty.
-    if (lastLocalRaw !== "") notesBakFile.setText(lastLocalRaw)
-    localFile.setText(payload)
-    lastLocalRaw = payload
+    // A failed load keeps memory intact (see onLoadFailed): never write the
+    // local file in that state, or a transient read error would wipe it.
+    // Snapshot + publish queue still go out so peers keep current state.
+    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, hidden: Store.sanitizeHidden(hiddenIds) }, null, 2) + "\n"
+    if (!localLoadFailed) {
+      // Rotate the previous state aside first (skipped on the very first save
+      // when nothing was loaded yet) — never overwrites the backup with empty.
+      if (lastLocalRaw !== "") notesBakFile.setText(lastLocalRaw)
+      localFile.setText(payload)
+      lastLocalRaw = payload
+    }
     writeSnapshot()
     // Internet publish queue for the built-in sync: shared notes + outbox
     // comments + deletion tombstones. sync.mjs encrypts one copy per
@@ -928,6 +977,7 @@ Panel {
     var notes = []
     var box = []
     var tomb = ({})
+    var hid = []
     try {
       var parsed = JSON.parse(String(raw || ""))
       var arr = parsed && Array.isArray(parsed.notes) ? parsed.notes : (Array.isArray(parsed) ? parsed : [])
@@ -937,14 +987,55 @@ Panel {
       })
       box = Store.sanitizeOutbox(parsed && parsed.outbox)
       tomb = Store.sanitizeDeleted(parsed && (parsed.deletedIds || parsed.deleted))
+      hid = Store.sanitizeHidden(parsed && parsed.hidden)
+      // Device rename migration: every note in this file was authored on
+      // this machine, whatever author string it carries. Re-sign stragglers
+      // to the current name so Share/Delete keep working and peers qualify
+      // the new name. Without this, renaming orphans notes (buttons hide,
+      // peers must allow-list the OLD name).
+      var nowId = Store.normalizeText(myId)
+      if (nowId !== "") {
+        var stamp = ""
+        notes.forEach(function (n) {
+          if (Store.normalizeText(n.author) !== nowId) {
+            n.author = nowId
+            if (stamp === "") stamp = Store.nowIso()
+            n.updatedAt = stamp
+          }
+        })
+      }
     } catch (e) { console.warn("transnote", "Ignoring bad notes file", e) }
     localNotes = Store.filterDeletedNotes(notes, tomb)
     outbox = box.filter(function (entry) { return entry && !Store.isDeleted(tomb, entry.noteId) })
     deletedIds = tomb
+    hiddenIds = hid
     // Pending Nostr deletes = all tombstones (reconciled after publish).
     pendingDeletes = Object.keys(tomb)
     localLoaded = true
+    localLoadFailed = false
     mergePeers()
+  }
+
+  // Re-sign local notes when the device name changes while running: the
+  // file migration in loadLocal only runs on load, but Setup saves the new
+  // name live. All local notes are this machine's by construction.
+  function migrateAuthors() {
+    var nowId = Store.normalizeText(myId)
+    if (nowId === "" || !localLoaded) return
+    var changed = false
+    var stamp = ""
+    ;(localNotes || []).forEach(function (n) {
+      if (n && Store.normalizeText(n.author) !== nowId) {
+        n.author = nowId
+        if (stamp === "") stamp = Store.nowIso()
+        n.updatedAt = stamp
+        changed = true
+      }
+    })
+    if (changed) {
+      touchLocalNotes()
+      persist()
+    }
   }
 
   // Returns { notes: [...], pairs: [{ noteId, comment }], deleted: {...} }.
@@ -1251,6 +1342,8 @@ Panel {
       for (var u in unreadIds) { if (u !== clean) unread[u] = unreadIds[u] }
       unreadIds = unread
     }
+    // A deleted note is never hidden: drop any local hide entry.
+    hiddenIds = Store.sanitizeHidden(hiddenIds).filter(function (hid) { return hid !== clean })
     persist()
     // Upload the kind-5 deletion immediately; persist() already queued it.
     // Guard mirrors runSyncCycle: no Nostr recipients or setup incomplete
@@ -1258,17 +1351,55 @@ Panel {
     if (setupStage === "ready" && Store.effectiveNostrAllow(allowList, friends).length > 0) startPublish()
   }
 
+  // Dismiss a peer's note on this machine only. Unlike deleteNote (owner
+  // deletes for everyone), hiding never publishes anything — the note stays
+  // visible to others and reappears here only via Unhide all.
+  function hideNote(id) {
+    var nid = Store.normalizeText(id)
+    if (nid === "" || isLocalNote(nid)) return
+    var hid = Store.sanitizeHidden(hiddenIds)
+    if (hid.indexOf(nid) === -1) {
+      hid.push(nid)
+      hiddenIds = hid
+      persist()
+    } else {
+      refreshDisplay()
+    }
+  }
+
+  function unhideAll() {
+    if ((hiddenIds || []).length === 0) return
+    hiddenIds = []
+    persist()
+  }
+
   function toggleShare(id) {
     for (var i = 0; i < localNotes.length; i++) {
       if (localNotes[i] && localNotes[i].id === id) {
-        Store.setShared(localNotes[i], !(localNotes[i].shared === true), myId)
-        // Unsharing retracts the synced mirror (local bytes stay).
+        // Local notes stay manageable after a device rename: re-sign to the
+        // current name when sharing — peers qualify authors, not file names.
+        if (Store.normalizeText(localNotes[i].author) !== Store.normalizeText(myId)) {
+          localNotes[i].author = Store.normalizeText(myId)
+        }
+        Store.setShared(localNotes[i], !(localNotes[i].shared === true), "")
+        // Unsharing retracts the synced mirror (local bytes stay) AND
+        // tombstones the note so peers drop their copy and Nostr relays
+        // serve the kind-5 deletion instead of the old ciphertext.
         if (!(localNotes[i].shared === true)) {
           var syncOnly = syncAttachSubdir(id)
           if (syncOnly !== "") {
-            gcProcess.command = ["bash", "-c", "rm -rf " + shellQuote(syncOnly) + " 2>/dev/null; true"]
-            gcProcess.running = true
+            queueGc(["bash", "-c", "rm -rf " + shellQuote(syncOnly) + " 2>/dev/null; true"])
           }
+          localNotes[i].updatedAt = Store.nowIso()
+          deletedIds = Store.addTombstone(deletedIds, id)
+          if (pendingDeletes.indexOf(id) === -1) pendingDeletes = pendingDeletes.concat([id])
+        } else {
+          // Re-sharing clears the tombstone so the live note wins again.
+          localNotes[i].updatedAt = Store.nowIso()
+          var kept = {}
+          for (var k in (deletedIds || {})) { if (k !== id) kept[k] = deletedIds[k] }
+          deletedIds = kept
+          pendingDeletes = (pendingDeletes || []).filter(function (pid) { return pid !== id })
         }
         touchLocalNotes()
         break
@@ -1377,7 +1508,22 @@ Panel {
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadLocal(text())
-    onLoadFailed: { root.localNotes = []; root.localLoaded = true; root.lastLocalRaw = ""; root.refreshDisplay() }
+    // A failed first read (missing file = fresh install) starts empty;
+    // a failed LATER read keeps memory so a transient error can never
+    // wipe notes.json — persist() also skips the local write while failed.
+    onLoadFailed: {
+      if (!root.localLoaded && (root.localNotes || []).length === 0) {
+        root.localNotes = []
+        root.outbox = []
+        root.deletedIds = ({})
+        root.hiddenIds = []
+        root.lastLocalRaw = ""
+      } else {
+        root.localLoadFailed = true
+      }
+      root.localLoaded = true
+      root.refreshDisplay()
+    }
     onFileChanged: reload()
   }
 
@@ -1527,10 +1673,12 @@ Panel {
     }
   }
 
-  // Fire-and-forget sidecar cleanup.
+  // Fire-and-forget sidecar cleanup (queued via queueGc/flushGc so
+  // bursts of deletes never overwrite each other).
   Process {
     id: gcProcess
     running: false
+    onExited: root.flushGc()
   }
 
   // Shared-sidecar mirror (see mirrorSharedAttachments).
@@ -1829,6 +1977,7 @@ Panel {
   }
 
   onAllowListChanged: { root.refilterNostr(); root.updateNetStatus() }
+  onMyIdChanged: root.migrateAuthors()
   onDisplayNotesChanged: {
     if (noteCursor >= displayNotes.length) noteCursor = displayNotes.length - 1
   }
@@ -1983,6 +2132,16 @@ Panel {
         foreground: root.foreground
         fontFamily: root.fontFamily
         width: parent.width
+      }
+
+      Button {
+        visible: (root.hiddenIds || []).length > 0
+        width: parent.width
+        text: "Hidden notes (" + (root.hiddenIds || []).length + ") — Unhide all"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        bordered: true
+        onClicked: root.unhideAll()
       }
 
       Button {
@@ -2143,12 +2302,14 @@ Panel {
               font.pixelSize: Style.font.caption
               maximumLineCount: 1
             }
-            // Quiet actions: icon-only, tooltips on hover. Share stays
-            // author-gated (only the author publishes); Delete covers all
-            // local notes so renames never trap them again. Explicit touch
-            // targets: icon-only buttons must not rely on implicit sizing.
+            // Quiet actions: icon-only, tooltips on hover. Share/Delete act
+            // on all local notes (not just author === myId) so a device
+            // rename can never trap notes; Delete additionally covers own
+            // Nostr copies; Hide dismisses other peers' notes locally
+            // without affecting anyone else. Explicit touch targets:
+            // icon-only buttons must not rely on implicit sizing.
             Button {
-              visible: note.author === root.myId
+              visible: root.isLocalNote(note.id)
               Layout.preferredWidth: Style.space(28)
               Layout.preferredHeight: Style.space(28)
               iconText: String.fromCodePoint(0xF0474)
@@ -2172,13 +2333,23 @@ Panel {
               Layout.preferredWidth: Style.space(28)
               Layout.preferredHeight: Style.space(28)
               iconText: String.fromCodePoint(0xF0194)
-              tooltipText: "Delete"
+              tooltipText: "Delete (everywhere)"
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.deleteNote(note.id)
             }
             Button {
-              visible: note.author === root.myId
+              visible: !root.isDeletable(note)
+              Layout.preferredWidth: Style.space(28)
+              Layout.preferredHeight: Style.space(28)
+              iconText: String.fromCodePoint(0xF06D1)
+              tooltipText: "Hide (this machine only)"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.hideNote(note.id)
+            }
+            Button {
+              visible: root.isLocalNote(note.id)
               Layout.preferredWidth: Style.space(28)
               Layout.preferredHeight: Style.space(28)
               iconText: String.fromCodePoint(0xF03B2)
@@ -2312,7 +2483,10 @@ Panel {
                   fillMode: Image.PreserveAspectFit
                   asynchronous: true
                   cache: false
-                  source: root.attUrl(attPath)
+                  // Empty source unless this is a verified image: QML loads
+                  // source even while invisible, so an audio/file attachment
+                  // would otherwise spam "Unsupported image format" errors.
+                  source: att.kind === "image" ? root.attUrl(attPath) : ""
                 }
                 Text {
                   visible: att.kind === "text" && root.attPeeks[attKey] !== undefined && root.attPeeks[attKey] !== ""
@@ -2416,7 +2590,7 @@ Panel {
           // Path suggestions for this note's attach field.
           Column {
             width: parent.width
-            visible: note.author === root.myId && root.completeFor === note.id && root.completeResults.length > 0 && attachPathField.activeFocus
+            visible: root.isLocalNote(note.id) && root.completeFor === note.id && root.completeResults.length > 0 && attachPathField.activeFocus
             spacing: Style.space(2)
             Repeater {
               model: root.completeResults
@@ -2679,7 +2853,7 @@ Panel {
       Text {
         width: parent.width
         visible: root.setupForeignAuthors.length > 0
-        text: "Heads up: your existing notes are signed as '" + root.setupForeignAuthors.join(", ") + "'. Renaming hides their Share/Delete buttons, and friends must allow the old name. Prefer keeping the name."
+        text: "Heads up: your existing notes are signed as '" + root.setupForeignAuthors.join(", ") + "'. Renaming re-signs them automatically, but friends must allow the new name. Prefer keeping the name."
         color: Qt.darker(root.foreground, 1.4)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
