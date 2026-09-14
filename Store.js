@@ -2,8 +2,9 @@
 // Schema:
 //   note: { id, title, body, author, createdAt, updatedAt, shared, comments: [], attachments: [] }
 //   comment: { id, author, text, createdAt }
-// Attachments are reserved for later: notes always carry `attachments: []`
-// and peers ignore entries they do not understand.
+// Attachments ride the note as strict metadata records (see
+// sanitizeAttachment) with bytes synced as folder sidecars; peers verify
+// the SHA-256 hash before trusting them.
 
 function nowIso() {
   return new Date().toISOString()
@@ -156,80 +157,6 @@ function setColor(note, color, requester) {
   return true
 }
 
-// Notes visible to `viewerId`: own notes always, plus shared notes whose
-// author qualifies the viewer OR whose owner (me) qualified the author.
-// `myId` is this device; `allowList` is my allow-list.
-function visibleNotes(notes, viewerId, myId, allowList) {
-  var list = Array.isArray(notes) ? notes : []
-  var me = normalizeText(myId)
-  var viewer = normalizeText(viewerId)
-  return list.filter(function (n) {
-    if (!n) return false
-    if (viewer === me) return true
-    if (n.shared !== true) return false
-    // My shared notes: viewer must be qualified by me.
-    if (n.author === me) return isQualified(viewer, allowList)
-    // A peer's shared note: I must have qualified its author.
-    return isQualified(n.author, allowList)
-  })
-}
-
-// Merge an incoming peer snapshot into local notes.
-// Rules: union by note id, last-updated wins for note fields, union comments
-// by id. Incoming notes are only accepted when they are shared AND their
-// author is qualified by my allow-list — except notes authored by myId
-// itself, which is how a second device of the same user syncs.
-// Incoming comments on my notes are only accepted from qualified peers
-// (or myself).
-function mergeNotes(localNotes, incomingNotes, myAllowList, myId) {
-  var me = normalizeText(myId)
-  var allowed = function (author) {
-    var a = normalizeText(author)
-    if (a !== "" && a === me) return true
-    return isQualified(a, myAllowList)
-  }
-  var local = (Array.isArray(localNotes) ? localNotes : []).map(sanitizeNote).filter(function (n) { return !!n })
-  var incoming = (Array.isArray(incomingNotes) ? incomingNotes : []).map(sanitizeNote).filter(function (n) { return !!n })
-  var byId = {}
-  local.forEach(function (n) { byId[n.id] = n })
-
-  incoming.forEach(function (peer) {
-    if (peer.shared !== true) return
-    if (!allowed(peer.author)) return
-    var existing = byId[peer.id]
-    if (!existing) {
-      byId[peer.id] = peer
-      return
-    }
-    // Last write wins for the note envelope; comments merge by id so no
-    // comment is ever lost by an older envelope overwriting a newer one.
-    var knownComments = {}
-    existing.comments.forEach(function (c) { knownComments[c.id] = true })
-    peer.comments.forEach(function (c) {
-      if (!knownComments[c.id]) {
-        // Only accept peer comments from qualified authors (or myself).
-        if (allowed(c.author) || c.author === peer.author) {
-          existing.comments.push(c)
-          knownComments[c.id] = true
-        }
-      }
-    })
-    if (peer.updatedAt >= existing.updatedAt) {
-      existing.title = peer.title
-      existing.body = peer.body
-      existing.updatedAt = peer.updatedAt
-      existing.shared = peer.shared
-      existing.attachments = peer.attachments
-      existing.color = peer.color
-    }
-    existing.comments.sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1 })
-  })
-
-  var out = Object.keys(byId).map(function (k) { return byId[k] })
-  out.sort(function (a, b) { return a.updatedAt < b.updatedAt ? 1 : -1 })
-  return out
-}
-
 function sortNotes(notes) {
   var out = (Array.isArray(notes) ? notes.slice() : [])
   out.sort(function (a, b) { return (a.updatedAt || "") < (b.updatedAt || "") ? 1 : -1 })
@@ -347,23 +274,6 @@ function filterDeletedNotes(notes, deletedMap) {
   return (Array.isArray(notes) ? notes : []).filter(function (n) {
     return n && !isDeleted(deletedMap, n.id)
   })
-}
-
-// Drop tombstones older than maxAgeDays (default 180) so the map stays
-// small. Only call this when you are sure all peers/relays have observed
-// the deletion — otherwise old ciphertext can resurrect the note.
-function pruneDeleted(deletedMap, maxAgeDays) {
-  var days = Number(maxAgeDays)
-  if (!isFinite(days) || days <= 0) days = 180
-  var cutoff = Date.now() - days * 24 * 3600 * 1000
-  var out = {}
-  sanitizeDeleted(deletedMap)
-  var src = deletedMap && typeof deletedMap === "object" ? deletedMap : {}
-  Object.keys(src).forEach(function (k) {
-    var t = Date.parse(src[k])
-    if (!isFinite(t) || t >= cutoff) out[k] = src[k]
-  })
-  return out
 }
 
 // Local-only hides: dismissing a peer's note hides it on this machine only
@@ -744,6 +654,9 @@ function buildNostrPublish(localNotes, outbox, deletedMap, pendingDeletes) {
 }
 
 if (typeof module !== "undefined") {
+  // Node test seam: every function the panel calls as Store.<fn>, plus the
+  // pure helpers covered by tests/*.py. Internal-only helpers (used solely
+  // inside this file) are intentionally NOT exported.
   module.exports = {
     nowIso: nowIso,
     uid: uid,
@@ -755,7 +668,6 @@ if (typeof module !== "undefined") {
     createNote: createNote,
     createComment: createComment,
     sanitizeNote: sanitizeNote,
-    sanitizeComment: sanitizeComment,
     sanitizeOutbox: sanitizeOutbox,
     mergeForeignComments: mergeForeignComments,
     pruneOutbox: pruneOutbox,
@@ -764,33 +676,24 @@ if (typeof module !== "undefined") {
     sanitizeAttachment: sanitizeAttachment,
     createAttachment: createAttachment,
     sanitizeFileName: sanitizeFileName,
-    attachmentKindFor: attachmentKindFor,
-    mimeForName: mimeForName,
     isRiskyExecutable: isRiskyExecutable,
     MAX_ATTACHMENT_BYTES: MAX_ATTACHMENT_BYTES,
     copyText: copyText,
     isSyncArtifact: isSyncArtifact,
-    hexRecipients: hexRecipients,
     sanitizeFriends: sanitizeFriends,
     effectiveNostrAllow: effectiveNostrAllow,
     sanitizeNostrFetch: sanitizeNostrFetch,
-    dedupNostrPairs: dedupNostrPairs,
     buildNostrPublish: buildNostrPublish,
     sanitizeDeleted: sanitizeDeleted,
     sanitizeHidden: sanitizeHidden,
-    MAX_HIDDEN: MAX_HIDDEN,
     addTombstone: addTombstone,
     mergeDeleted: mergeDeleted,
     isDeleted: isDeleted,
     filterDeletedNotes: filterDeletedNotes,
-    pruneDeleted: pruneDeleted,
     addComment: addComment,
     setShared: setShared,
     setColor: setColor,
     sanitizeColor: sanitizeColor,
-    NOTE_COLORS: NOTE_COLORS,
-    visibleNotes: visibleNotes,
-    mergeNotes: mergeNotes,
     sortNotes: sortNotes
   }
 }

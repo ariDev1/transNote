@@ -1,7 +1,7 @@
 // transNote ↔ Nostr bridge (Node, nostr-tools).
 // The QML shell cannot speak websockets; this helper does relay I/O and
-// exchanges plain JSON files with the plugin (same pattern as
-// omarchy-agent-usage-update: background job writes files, UI watches them).
+// exchanges plain JSON files with the plugin: background job writes files,
+// UI watches them.
 //
 //   node sync.mjs ensure-key --key-file <path>
 //     Creates ~/.local/share/transnote/nostr_key (nsec, mode 600) if missing.

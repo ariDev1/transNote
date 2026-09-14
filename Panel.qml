@@ -1466,10 +1466,6 @@ Panel {
     persist()
   }
 
-  function isQualifiedPeer(peerId) {
-    return Store.isQualified(peerId, allowList)
-  }
-
   // Hex pubkeys are 64 chars — show first 8. 🌐 marks internet (Nostr)
   // notes so users can tell them apart from local/folder notes.
   function shortAuthor(id) {
