@@ -7,6 +7,7 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 import {
+  assertLanPeerIdentityCompatible,
   decodePairingCode,
   encodePairingCode,
   loadLanPeers,
@@ -716,15 +717,18 @@ async function runCli(argv) {
 
   if (command === 'pair') {
     const syncDir = required(options, 'sync-dir');
-    await mkdir(syncDir, {recursive: true, mode: 0o700});
+    if (dataDir === '')
+      throw controlError('BAD_OPTION', 'Missing --data-dir');
+
     const remote = decodePairingCode(required(options, 'code'));
+    await assertLanPeerIdentityCompatible(dataDir, remote);
+
+    await mkdir(syncDir, {recursive: true, mode: 0o700});
     const result = await control.pair({
       localTransnoteDeviceId: required(options, 'device-id'),
       syncDir,
       remote,
     });
-    if (dataDir === '')
-      throw controlError('BAD_OPTION', 'Missing --data-dir');
     const peer = await saveLanPeer(dataDir, result.peer);
     return {ok: true, peer};
   }

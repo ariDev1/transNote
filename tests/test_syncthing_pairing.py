@@ -133,6 +133,51 @@ class SyncthingPairingTests(unittest.TestCase):
         self.assertIn("--label", folder_adds[0])
         self.assertIn("transnote-lan", folder_adds[0])
 
+    def test_pair_folder_conflict_fails_before_syncthing_mutation(self):
+        self.data.mkdir(parents=True, exist_ok=True)
+        (self.data / "lan_peers.json").write_text(json.dumps({
+            "version": 1,
+            "peers": [{
+                "transnoteDeviceId": "reichskanzlei",
+                "syncthingDeviceId": REMOTE_ID,
+                "folderId": REMOTE_FOLDER,
+                "pairedAt": "2026-09-15T10:00:00.000Z",
+            }],
+        }))
+
+        result = self.run_cli(
+            "pair",
+            extra=[
+                "--code",
+                pairing_code(folder="tn-1111111111111111"),
+            ],
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stderr)["code"], "PAIR_CONFLICT")
+        self.assertEqual(read_commands(self.log), [])
+
+    def test_pair_identity_conflict_fails_before_syncthing_mutation(self):
+        self.data.mkdir(parents=True, exist_ok=True)
+        (self.data / "lan_peers.json").write_text(json.dumps({
+            "version": 1,
+            "peers": [{
+                "transnoteDeviceId": "reichskanzlei",
+                "syncthingDeviceId": REMOTE_ID,
+                "folderId": REMOTE_FOLDER,
+                "pairedAt": "2026-09-15T10:00:00.000Z",
+            }],
+        }))
+
+        result = self.run_cli(
+            "pair",
+            extra=["--code", pairing_code(device=EXISTING_ID)],
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stderr)["code"], "PAIR_CONFLICT")
+        self.assertEqual(read_commands(self.log), [])
+
     def test_pair_uses_remote_folder_when_local_path_is_empty(self):
         result = self.run_cli("pair", extra=["--code", pairing_code()])
         self.assertEqual(result.returncode, 0, msg=result.stderr)

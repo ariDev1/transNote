@@ -153,6 +153,35 @@ export async function loadLanPeers(dataDir) {
   }
 }
 
+export async function assertLanPeerIdentityCompatible(dataDir, value) {
+  const clean = cleanPeer(value);
+  const store = await loadLanPeers(dataDir);
+
+  for (const peer of store.peers) {
+    const sameSyncthing =
+      peer.syncthingDeviceId === clean.syncthingDeviceId;
+    const sameName =
+      peer.transnoteDeviceId === clean.transnoteDeviceId;
+
+    if (sameSyncthing || sameName) {
+      if (
+        peer.syncthingDeviceId !== clean.syncthingDeviceId ||
+        peer.transnoteDeviceId !== clean.transnoteDeviceId ||
+        peer.folderId !== clean.folderId
+      ) {
+        throw pairingError(
+          'PAIR_CONFLICT',
+          'paired machine identity conflicts with existing record'
+        );
+      }
+
+      return peer;
+    }
+  }
+
+  return null;
+}
+
 export async function saveLanPeer(dataDir, value, pairedAt = new Date().toISOString()) {
   const clean = cleanPeer(value);
   const store = await loadLanPeers(dataDir);
