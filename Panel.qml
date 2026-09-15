@@ -70,6 +70,7 @@ Panel {
   readonly property string syncBundle: pluginDir + "/nostr/sync.bundle.mjs"
   readonly property string envBin: "/usr/bin/env"
   readonly property string nodeBin: "/usr/bin/node"
+  readonly property string pairingHelper: pluginDir + "/lan/syncthing.mjs"
   readonly property string relays: "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
   property string myHex: ""
   property string myNpub: ""
@@ -458,6 +459,15 @@ Panel {
   property string setupPeers: ""
   property string setupMessage: ""
   property bool setupSaving: false
+  // TN1 device-pairing state. Pairing is optional: the existing manual
+  // folder-sync settings below remain authoritative and usable without it.
+  property string pairingCode: ""
+  property string incomingPairingCode: ""
+  property string pairingMessage: "Device sync is ready to configure."
+  property bool pairingBusy: false
+  property var pairingPendingDevices: []
+  property var pairingPendingOffers: []
+  property var pairingPeers: []
   // Last folder-merge outcome, shown in Setup so a missing peer note can be
   // located without log access: files seen → notes parsed → notes kept →
   // notes displayed. Updated by rebuildPeerNotes() on every peer load.
@@ -478,6 +488,168 @@ Panel {
     })
     return out
   }
+  function pairingSyncDir() {
+    var d = expandSetupDir(setupDir)
+    if (d !== "") return d
+    return syncDir
+  }
+  function pairingDeviceId() {
+    var d = Store.normalizeText(setupDevice)
+    return d !== "" ? d : myId
+  }
+  function pairingBaseCommand(action) {
+    return [nodeBin, pairingHelper, action,
+      "--device-id", pairingDeviceId(),
+      "--sync-dir", pairingSyncDir(),
+      "--data-dir", dataDir]
+  }
+  function pairingErrorMessage(info) {
+    var code = Store.normalizeText(info && info.code)
+    if (code === "SYNCTHING_NOT_FOUND") return "Syncthing is not installed. Manual folder sync still works."
+    if (code === "SYNCTHING_NOT_RUNNING") return "Syncthing is not running. Manual folder sync still works."
+    if (code === "BAD_PAIRING_CODE") return "That TransNote setup code is invalid."
+    if (code === "PAIR_SELF") return "This setup code belongs to this computer."
+    if (code === "PAIR_CONFLICT") return "This computer conflicts with an existing pairing record."
+    if (code === "FOLDER_ID_CONFLICT" || code === "FOLDER_PATH_CONFLICT") return "The TransNote folder conflicts with an existing Syncthing folder."
+    if (code === "PENDING_OFFER_MISMATCH") return "The pending folder offer does not match this setup code."
+    var msg = Store.normalizeText(info && info.message)
+    return msg !== "" ? msg : "Device sync failed. Manual folder sync remains available."
+  }
+  function parsePairingResult(text) {
+    try { return JSON.parse(String(text || "")) }
+    catch (e) { return null }
+  }
+  function preparePairing() {
+    if (pairingBusy) return
+    if (Store.normalizeText(pairingSyncDir()) === "") {
+      pairingMessage = "Enter a shared folder first."
+      return
+    }
+    pairingBusy = true
+    pairingMessage = "Preparing device sync…"
+    pairingProcess.action = "prepare"
+    pairingProcess.output = ""
+    pairingProcess.errorOutput = ""
+    pairingProcess.command = pairingBaseCommand("prepare")
+    pairingProcess.running = true
+  }
+  function connectPairing() {
+    if (pairingBusy) return
+    var code = Store.normalizeText(incomingPairingCode)
+    if (code === "") {
+      pairingMessage = "Paste a TransNote setup code first."
+      return
+    }
+    pairingBusy = true
+    pairingMessage = "Connecting computer…"
+    pairingProcess.action = "pair"
+    pairingProcess.output = ""
+    pairingProcess.errorOutput = ""
+    pairingProcess.command = pairingBaseCommand("pair").concat(["--code", code])
+    pairingProcess.running = true
+  }
+  function acceptPairingDevice(deviceId) {
+    if (pairingBusy) return
+    var id = Store.normalizeText(deviceId)
+    if (id === "") return
+    pairingBusy = true
+    pairingMessage = "Accepting computer connection…"
+    pairingProcess.action = "accept-device"
+    pairingProcess.output = ""
+    pairingProcess.errorOutput = ""
+    pairingProcess.command = pairingBaseCommand("accept-device").concat(["--syncthing-device-id", id])
+    pairingProcess.running = true
+  }
+  function acceptPairingFolder(folderId, deviceId) {
+    if (pairingBusy) return
+    var folder = Store.normalizeText(folderId)
+    var device = Store.normalizeText(deviceId)
+    if (folder === "" || device === "") return
+    pairingBusy = true
+    pairingMessage = "Accepting TransNote folder…"
+    pairingProcess.action = "accept-folder"
+    pairingProcess.output = ""
+    pairingProcess.errorOutput = ""
+    pairingProcess.command = pairingBaseCommand("accept-folder").concat([
+      "--folder-id", folder,
+      "--syncthing-device-id", device])
+    pairingProcess.running = true
+  }
+  function persistPairingBaseSettings() {
+    var device = pairingDeviceId()
+    var folder = Store.normalizeText(setupDir)
+    if (device !== Store.normalizeText(deviceIdSetting)) {
+      barSetDevice.command = [omarchyBin, "bar", "set", "aridev1.transnote", "deviceId", device]
+      barSetDevice.running = true
+    }
+    if (folder !== "" && folder !== Store.normalizeText(syncDirSetting)) {
+      barSetDir.command = [omarchyBin, "bar", "set", "aridev1.transnote", "syncDir", folder]
+      barSetDir.running = true
+    }
+  }
+  function qualifyPairingPeer(peerName) {
+    var peer = Store.normalizeText(peerName)
+    if (peer === "") return
+    var peers = Store.parseAllowList(setupPeers)
+    if (peers.indexOf(peer) === -1) peers.push(peer)
+    setupPeers = peers.join(",")
+    if (setupPeersField) setupPeersField.text = setupPeers
+    saveSetupPeers()
+  }
+  function finishPairingAction(exitCode, action, output, errorOutput) {
+    pairingBusy = false
+    var info = parsePairingResult(exitCode === 0 ? output : errorOutput)
+    if (exitCode !== 0 || !info || info.ok !== true) {
+      pairingMessage = pairingErrorMessage(info || {})
+      refreshPairingStatus()
+      return
+    }
+    if (action === "prepare") {
+      persistPairingBaseSettings()
+      pairingCode = Store.normalizeText(info.pairingCode)
+      pairingMessage = pairingCode !== "" ? "Setup code ready." : "Pairing helper returned no setup code."
+    } else if (action === "pair") {
+      persistPairingBaseSettings()
+      var peer = Store.normalizeText(info.peer && info.peer.transnoteDeviceId)
+      if (peer !== "") {
+        qualifyPairingPeer(peer)
+        pairingMessage = "Connected to " + peer + "."
+      } else {
+        pairingMessage = "Connected, but no TransNote machine name was returned."
+      }
+    } else if (action === "accept-device") {
+      var deviceName = Store.normalizeText(info.deviceName)
+      pairingMessage = "Computer accepted" + (deviceName !== "" ? ": " + deviceName : "") + ". Waiting for folder offer…"
+    } else if (action === "accept-folder") {
+      persistPairingBaseSettings()
+      pairingMessage = "TransNote folder accepted."
+    }
+    refreshPairingStatus()
+  }
+  function applyPairingStatus(exitCode, output, errorOutput) {
+    var info = parsePairingResult(exitCode === 0 ? output : errorOutput)
+    if (exitCode !== 0 || !info || info.ok !== true) {
+      pairingMessage = pairingErrorMessage(info || {})
+      return
+    }
+    pairingPendingDevices = Array.isArray(info.pendingDevices) ? info.pendingDevices : []
+    pairingPendingOffers = Array.isArray(info.pendingOffers) ? info.pendingOffers : []
+    pairingPeers = Array.isArray(info.peers) ? info.peers : []
+    if (info.installed === false) pairingMessage = "Syncthing is not installed. Manual folder sync still works."
+    else if (info.running === false) pairingMessage = "Syncthing is not running. Manual folder sync still works."
+  }
+  function refreshPairingStatus() {
+    if (pairingStatusProcess.running) return
+    pairingStatusProcess.output = ""
+    pairingStatusProcess.errorOutput = ""
+    pairingStatusProcess.command = pairingBaseCommand("status")
+    pairingStatusProcess.running = true
+  }
+  function copyPairingCode() {
+    if (Store.normalizeText(pairingCode) === "") return
+    pairingCopyProcess.command = ["bash", "-c", "printf '%s' \"$1\" | wl-copy", "transnote-pairing", pairingCode]
+    pairingCopyProcess.running = true
+  }
   function openSetup() {
     setupDevice = myId
     setupDir = Store.normalizeText(syncDirSetting) !== "" ? Store.normalizeText(syncDirSetting) : "~/transnote-lan"
@@ -488,6 +660,7 @@ Panel {
     setupMessage = ""
     panelView = "setup"
     checkSetupFolder()
+    refreshPairingStatus()
   }
   function expandSetupDir(path) {
     var d = Store.normalizeText(path)
@@ -1753,6 +1926,60 @@ Panel {
   }
 
   Process {
+    id: pairingProcess
+    property string action: ""
+    property string output: ""
+    property string errorOutput: ""
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: pairingProcess.output = text
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: pairingProcess.errorOutput = text
+    }
+    onExited: function (exitCode) {
+      var actionNow = action
+      var outputNow = output
+      var errorNow = errorOutput
+      Qt.callLater(function () {
+        root.finishPairingAction(exitCode, actionNow, outputNow, errorNow)
+      })
+    }
+  }
+
+  Process {
+    id: pairingStatusProcess
+    property string output: ""
+    property string errorOutput: ""
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: pairingStatusProcess.output = text
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: pairingStatusProcess.errorOutput = text
+    }
+    onExited: function (exitCode) {
+      var outputNow = output
+      var errorNow = errorOutput
+      Qt.callLater(function () {
+        root.applyPairingStatus(exitCode, outputNow, errorNow)
+      })
+    }
+  }
+
+  Process {
+    id: pairingCopyProcess
+    running: false
+    onExited: function (exitCode) {
+      root.pairingMessage = exitCode === 0 ? "Setup code copied." : "Copy failed — select the setup code manually."
+    }
+  }
+
+  Process {
     id: barSetPeers
     running: false
     onExited: function (exitCode) { root.onBarSetDone("peers", exitCode) }
@@ -2816,6 +3043,192 @@ Panel {
         font.pixelSize: Style.font.body
         wrapMode: Text.WrapAnywhere
       }
+      Text {
+        width: parent.width
+        text: "Device sync"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
+      Text {
+        width: parent.width
+        text: "This computer: " + root.pairingDeviceId()
+        color: root.foreground
+        opacity: 0.75
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+      }
+      Button {
+        width: parent.width
+        text: root.pairingBusy ? "Working…" : "Start new sync"
+        enabled: !root.pairingBusy
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        bordered: true
+        onClicked: root.preparePairing()
+      }
+      Text {
+        width: parent.width
+        text: "Your setup code"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(6)
+        TextField {
+          id: pairingCodeField
+          Layout.fillWidth: true
+          Layout.minimumWidth: 0
+          readOnly: true
+          placeholderText: "Select Start new sync first"
+          foreground: root.foreground
+          text: root.pairingCode
+          onActiveFocusChanged: root.editing = activeFocus
+        }
+        Button {
+          text: "Copy code"
+          enabled: root.pairingCode !== ""
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.copyPairingCode()
+        }
+      }
+      Text {
+        width: parent.width
+        text: "Join existing sync"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+      TextField {
+        id: incomingPairingField
+        width: parent.width
+        placeholderText: "Paste TransNote setup code"
+        foreground: root.foreground
+        text: root.incomingPairingCode
+        onTextChanged: root.incomingPairingCode = text
+        onAccepted: root.connectPairing()
+        onActiveFocusChanged: root.editing = activeFocus
+      }
+      Button {
+        width: parent.width
+        text: "Connect"
+        enabled: !root.pairingBusy && Store.normalizeText(root.incomingPairingCode) !== ""
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        bordered: true
+        onClicked: root.connectPairing()
+      }
+      Text {
+        visible: root.pairingPendingDevices.length > 0
+        width: parent.width
+        text: "Pending computer connections"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+      Repeater {
+        model: root.pairingPendingDevices
+        delegate: RowLayout {
+          required property var modelData
+          width: parent ? parent.width : 0
+          Text {
+            Layout.fillWidth: true
+            text: Store.normalizeText(modelData.deviceName) !== ""
+              ? modelData.deviceName
+              : String(modelData.syncthingDeviceId || "").slice(0, 7) + "…"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+          Button {
+            text: "Accept"
+            enabled: !root.pairingBusy
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            onClicked: root.acceptPairingDevice(modelData.syncthingDeviceId)
+          }
+        }
+      }
+      Text {
+        visible: root.pairingPendingOffers.length > 0
+        width: parent.width
+        text: "Pending TransNote folders"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+      Repeater {
+        model: root.pairingPendingOffers
+        delegate: RowLayout {
+          required property var modelData
+          width: parent ? parent.width : 0
+          Text {
+            Layout.fillWidth: true
+            text: Store.normalizeText(modelData.deviceName) !== ""
+              ? modelData.deviceName + " · " + modelData.folderId
+              : modelData.folderId
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+          Button {
+            text: "Accept"
+            enabled: !root.pairingBusy
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            onClicked: root.acceptPairingFolder(modelData.folderId, modelData.syncthingDeviceId)
+          }
+        }
+      }
+      Text {
+        width: parent.width
+        text: "Connected computers"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+      Text {
+        width: parent.width
+        text: root.pairingPeers.length === 0
+          ? "No computers connected yet."
+          : root.pairingPeers.map(function (p) {
+              var state = p.connected === true ? "connected" : (p.configured === true ? "configured" : "not ready")
+              return p.transnoteDeviceId + " (" + state + ")"
+            }).join(", ")
+        color: root.foreground
+        opacity: 0.72
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
+        text: root.pairingMessage
+        color: root.foreground
+        opacity: 0.72
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
+        text: "Advanced / manual setup"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
+
       Text {
         width: parent.width
         text: "1 — Name this machine (becomes <name>.json in the folder):"
