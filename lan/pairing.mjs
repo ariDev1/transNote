@@ -166,8 +166,7 @@ export async function assertLanPeerIdentityCompatible(dataDir, value) {
     if (sameSyncthing || sameName) {
       if (
         peer.syncthingDeviceId !== clean.syncthingDeviceId ||
-        peer.transnoteDeviceId !== clean.transnoteDeviceId ||
-        peer.folderId !== clean.folderId
+        peer.transnoteDeviceId !== clean.transnoteDeviceId
       ) {
         throw pairingError(
           'PAIR_CONFLICT',

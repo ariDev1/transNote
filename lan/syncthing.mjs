@@ -336,7 +336,7 @@ export function createSyncthingControl({
       };
     },
 
-    async pair({localTransnoteDeviceId, syncDir, remote}) {
+    async pair({localTransnoteDeviceId, syncDir, remote, expectedFolderId = ''}) {
       const system = await readSystem();
       const cleanRemote = validatePairingPeer({
         remote,
@@ -354,6 +354,7 @@ export function createSyncthingControl({
       ) || null;
 
       let folder = null;
+      let provisionalFolderId = '';
 
       if (byPath) {
         requireUsableFolder(byPath);
@@ -373,15 +374,7 @@ export function createSyncthingControl({
 
           requireMatchingPendingOffer(pending, cleanRemote);
 
-          await run([
-            'cli',
-            'config',
-            'folders',
-            byPath.id,
-            'delete',
-          ]);
-
-          byPath = null;
+          provisionalFolderId = String(byPath.id ?? '');
           folder = byId;
         } else if (isTransnoteFolder(byPath)) {
           folder = byPath;
@@ -401,6 +394,29 @@ export function createSyncthingControl({
 
         requireMatchingPendingOffer(pending, cleanRemote);
         folder = byId;
+      }
+
+      const prospectiveFolderId =
+        String(folder?.id ?? cleanRemote.folderId);
+
+      if (
+        expectedFolderId !== '' &&
+        prospectiveFolderId !== expectedFolderId
+      ) {
+        throw controlError(
+          'PAIR_CONFLICT',
+          'paired machine folder conflicts with existing record'
+        );
+      }
+
+      if (provisionalFolderId !== '') {
+        await run([
+          'cli',
+          'config',
+          'folders',
+          provisionalFolderId,
+          'delete',
+        ]);
       }
 
       const deviceExists = config.devices.some(
@@ -721,13 +737,15 @@ async function runCli(argv) {
       throw controlError('BAD_OPTION', 'Missing --data-dir');
 
     const remote = decodePairingCode(required(options, 'code'));
-    await assertLanPeerIdentityCompatible(dataDir, remote);
+    const storedPeer =
+      await assertLanPeerIdentityCompatible(dataDir, remote);
 
     await mkdir(syncDir, {recursive: true, mode: 0o700});
     const result = await control.pair({
       localTransnoteDeviceId: required(options, 'device-id'),
       syncDir,
       remote,
+      expectedFolderId: String(storedPeer?.folderId ?? ''),
     });
     const peer = await saveLanPeer(dataDir, result.peer);
     return {ok: true, peer};

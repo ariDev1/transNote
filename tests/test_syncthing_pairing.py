@@ -133,6 +133,47 @@ class SyncthingPairingTests(unittest.TestCase):
         self.assertIn("--label", folder_adds[0])
         self.assertIn("transnote-lan", folder_adds[0])
 
+    def test_repair_keeps_established_local_folder_authoritative(self):
+        established = "reye3-kwu5q"
+
+        self.data.mkdir(parents=True, exist_ok=True)
+        (self.data / "lan_peers.json").write_text(json.dumps({
+            "version": 1,
+            "peers": [{
+                "transnoteDeviceId": "reichskanzlei",
+                "syncthingDeviceId": REMOTE_ID,
+                "folderId": established,
+                "pairedAt": "2026-09-15T10:00:00.000Z",
+            }],
+        }))
+
+        config = {
+            "folders": [{
+                "id": established,
+                "label": "transnote-lan",
+                "path": str(self.sync.resolve()),
+                "type": "sendreceive",
+                "paused": False,
+                "devices": [
+                    {"deviceID": LOCAL_ID},
+                    {"deviceID": REMOTE_ID},
+                ],
+            }],
+            "devices": [
+                {"deviceID": LOCAL_ID},
+                {"deviceID": REMOTE_ID},
+            ],
+        }
+
+        result = self.run_cli(
+            "pair",
+            config=config,
+            extra=["--code", pairing_code(folder=REMOTE_FOLDER)],
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(json.loads(result.stdout)["peer"]["folderId"], established)
+
     def test_pair_folder_conflict_fails_before_syncthing_mutation(self):
         self.data.mkdir(parents=True, exist_ok=True)
         (self.data / "lan_peers.json").write_text(json.dumps({
@@ -155,7 +196,13 @@ class SyncthingPairingTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stderr)["code"], "PAIR_CONFLICT")
-        self.assertEqual(read_commands(self.log), [])
+        commands = read_commands(self.log)
+        mutating = [
+            command for command in commands
+            if command[:3] == ["cli", "config", "devices"]
+            or command[:3] == ["cli", "config", "folders"]
+        ]
+        self.assertEqual(mutating, [])
 
     def test_pair_identity_conflict_fails_before_syncthing_mutation(self):
         self.data.mkdir(parents=True, exist_ok=True)
@@ -176,7 +223,13 @@ class SyncthingPairingTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stderr)["code"], "PAIR_CONFLICT")
-        self.assertEqual(read_commands(self.log), [])
+        commands = read_commands(self.log)
+        mutating = [
+            command for command in commands
+            if command[:3] == ["cli", "config", "devices"]
+            or command[:3] == ["cli", "config", "folders"]
+        ]
+        self.assertEqual(mutating, [])
 
     def test_pair_uses_remote_folder_when_local_path_is_empty(self):
         result = self.run_cli("pair", extra=["--code", pairing_code()])
