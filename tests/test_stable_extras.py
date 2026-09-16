@@ -121,8 +121,9 @@ class CleanupAndGuardTests(unittest.TestCase):
 
     def test_no_direct_gc_overwrite_remains(self):
         # Only flushGc (the queue drain) may assign gcProcess.command:
-        # attach/note cleanup must go through queueGc.
-        self.assertEqual(self.panel.count("gcProcess.command"), 2)
+        # attach/note cleanup must go through queueGc. The queue now drains
+        # one argv command at a time, so there is one assignment site.
+        self.assertEqual(self.panel.count("gcProcess.command"), 1)
         self.assertEqual(self.panel.count("queueGc(["), 5)
 
     def test_load_failure_keeps_memory(self):

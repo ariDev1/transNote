@@ -76,6 +76,7 @@ Panel {
   readonly property string envBin: "/usr/bin/env"
   readonly property string nodeBin: "/usr/bin/node"
   readonly property string pairingHelper: pluginDir + "/lan/syncthing.mjs"
+  readonly property string secureRemoveHelper: pluginDir + "/lan/secure_remove.py"
   readonly property string relays: "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
   property string myHex: ""
   property string myNpub: ""
@@ -338,21 +339,18 @@ Panel {
   // only, true deletes own + synced mirror (delete). Never use for
   // unshare — that must keep local bytes and drop only the mirror
   // (see toggleShare).
-  function queueSafeRemove(rootDir, targetDir) {
-    if (rootDir === "" || targetDir === "") return
-    // ID validation is the first boundary. Canonical containment is an
-    // independent second boundary before recursive deletion.
-    var script = "root=$(/usr/bin/realpath -m -- " + shellQuote(rootDir) + ") || exit 0; "
-      + "target=$(/usr/bin/realpath -m -- " + shellQuote(targetDir) + ") || exit 0; "
-      + "case \"$target\" in \"$root\"/*) /usr/bin/rm -rf -- \"$target\" ;; esac"
-    queueGc(["bash", "-c", script])
+  function queueSafeRemove(rootDir, noteId) {
+    if (rootDir === "" || !Store.isSafeId(noteId)) return
+    // No shell and no inherited environment. The helper retains directory
+    // descriptors and never reopens a checked descendant by pathname.
+    queueGc([envBin, "-i", "/usr/bin/python3", secureRemoveHelper, rootDir, noteId])
   }
 
   function removeAttachDirs(noteId, includeSync) {
     if (!Store.isSafeId(noteId)) return
-    queueSafeRemove(localAttachDir, ownAttachSubdir(noteId))
+    queueSafeRemove(localAttachDir, noteId)
     var syncRoot = syncAttachDir()
-    if (includeSync && syncRoot !== "") queueSafeRemove(syncRoot, syncAttachSubdir(noteId))
+    if (includeSync && syncRoot !== "") queueSafeRemove(syncRoot, noteId)
   }
   // Fire-and-forget sidecar cleanup queue: gcProcess is a single shared
   // slot, so rapid consecutive deletes must queue instead of overwriting
@@ -367,15 +365,10 @@ Panel {
     if (gcProcess.running) return
     var q = pendingGc || []
     if (q.length === 0) return
-    pendingGc = []
-    if (q.length === 1) {
-      gcProcess.command = q[0]
-    } else {
-      // Each queued entry is ["bash", "-c", <script>]: run the scripts in
-      // one shell so no cleanup is lost when deletes happen in a burst.
-      var scripts = q.map(function (c) { return String(c[2] || "true") })
-      gcProcess.command = ["bash", "-c", scripts.join("\n") + "\ntrue"]
-    }
+    // Preserve each command as argv. This lets the secure-delete helper run
+    // directly through /usr/bin/env without a shell or inherited environment.
+    gcProcess.command = q[0]
+    pendingGc = q.slice(1)
     gcProcess.running = true
   }
   // Remove one attachment: drop the record, delete both sidecars.
