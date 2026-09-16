@@ -18,6 +18,19 @@ function normalizeText(value) {
   return String(value === undefined || value === null ? "" : value).trim()
 }
 
+// IDs that cross a sync boundary can become filesystem path components.
+// Accept only the grammar produced by TransNote's uid() helper.
+var SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+function isSafeId(value) {
+  return SAFE_ID_RE.test(normalizeText(value))
+}
+
+function sanitizeId(value) {
+  var s = normalizeText(value)
+  return isSafeId(s) ? s : ""
+}
+
 // Parse the allowList setting, which may be an array, a comma-separated
 // string, or empty.
 function parseAllowList(value) {
@@ -76,7 +89,7 @@ function createNote(title, body, author) {
 function sanitizeNote(raw) {
   if (!raw || typeof raw !== "object") return null
   var note = {
-    id: normalizeText(raw.id),
+    id: sanitizeId(raw.id),
     title: normalizeText(raw.title) || "Untitled",
     body: normalizeText(raw.body),
     author: normalizeText(raw.author) || "unknown",
@@ -172,7 +185,7 @@ function sanitizeOutbox(raw) {
   for (var i = 0; i < arr.length; i++) {
     var entry = arr[i]
     if (!entry || typeof entry !== "object") continue
-    var noteId = normalizeText(entry.noteId)
+    var noteId = sanitizeId(entry.noteId)
     var c = sanitizeComment(entry.comment)
     if (noteId === "" || !c) continue
     out.push({ noteId: noteId, comment: c })
@@ -225,16 +238,16 @@ function sanitizeDeleted(raw) {
     if (Array.isArray(raw)) {
       raw.forEach(function (entry) {
         if (typeof entry === "string") {
-          var id = normalizeText(entry)
+          var id = sanitizeId(entry)
           if (id !== "") out[id] = nowIso()
         } else if (entry && typeof entry === "object") {
-          var eid = normalizeText(entry.id || entry.noteId)
+          var eid = sanitizeId(entry.id || entry.noteId)
           if (eid !== "") out[eid] = normalizeText(entry.deletedAt) || nowIso()
         }
       })
     } else if (raw && typeof raw === "object") {
       Object.keys(raw).forEach(function (k) {
-        var id = normalizeText(k)
+        var id = sanitizeId(k)
         if (id === "") return
         var v = raw[k]
         out[id] = normalizeText(typeof v === "string" ? v : (v && v.deletedAt)) || nowIso()
@@ -246,9 +259,9 @@ function sanitizeDeleted(raw) {
 
 function addTombstone(deletedMap, id) {
   var out = {}
-  var src = deletedMap && typeof deletedMap === "object" ? deletedMap : {}
+  var src = sanitizeDeleted(deletedMap)
   Object.keys(src).forEach(function (k) { out[k] = src[k] })
-  var clean = normalizeText(id)
+  var clean = sanitizeId(id)
   if (clean !== "") out[clean] = nowIso()
   return out
 }
@@ -288,8 +301,8 @@ function sanitizeHidden(raw) {
   for (var i = 0; i < arr.length; i++) {
     var entry = arr[i]
     var id
-    if (typeof entry === "string") id = normalizeText(entry)
-    else if (entry && typeof entry === "object" && entry.id !== undefined) id = normalizeText(entry.id)
+    if (typeof entry === "string") id = sanitizeId(entry)
+    else if (entry && typeof entry === "object" && entry.id !== undefined) id = sanitizeId(entry.id)
     else continue
     if (id === "" || seen[id]) continue
     seen[id] = true
@@ -437,7 +450,7 @@ function mimeForName(name) {
 // Returns a clean record or null.
 function sanitizeAttachment(raw) {
   if (!raw || typeof raw !== "object") return null
-  var id = normalizeText(raw.id)
+  var id = sanitizeId(raw.id)
   var name = sanitizeFileName(raw.name)
   var size = Math.floor(Number(raw.size))
   var sha = normalizeText(raw.sha256).toLowerCase()
@@ -454,8 +467,8 @@ function createAttachment(name, size, sha256, id) {
   var clean = sanitizeFileName(name)
   var s = Math.floor(Number(size))
   var sha = normalizeText(sha256).toLowerCase()
-  var attId = normalizeText(id) !== "" ? normalizeText(id) : uid("att")
-  if (clean === "" || !isFinite(s) || s < 0 || s > MAX_ATTACHMENT_BYTES) return null
+  var attId = normalizeText(id) !== "" ? sanitizeId(id) : uid("att")
+  if (attId === "" || clean === "" || !isFinite(s) || s < 0 || s > MAX_ATTACHMENT_BYTES) return null
   if (!/^[0-9a-f]{64}$/.test(sha)) return null
   return { id: attId, name: clean, size: s, sha256: sha, mime: mimeForName(clean), kind: attachmentKindFor(clean) }
 }
@@ -543,7 +556,7 @@ function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
       if (ca === "") continue
       if (!(ca === me || isQualified(ca, allowList))) continue
       var sc = sanitizeComment({ id: c.id, author: ca, text: c.text, createdAt: c.createdAt })
-      var noteId = normalizeText(e.noteId)
+      var noteId = sanitizeId(e.noteId)
       if (noteId === "" || !sc) continue
       pairs.push({ noteId: noteId, comment: sc })
     }
@@ -551,7 +564,7 @@ function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
     for (var d = 0; d < rawDeleted.length; d++) {
       var del = rawDeleted[d]
       if (!del || typeof del !== "object") continue
-      var delId = normalizeText(del.noteId || del.id || del.d)
+      var delId = sanitizeId(del.noteId || del.id || del.d)
       if (delId === "") continue
       var delAuthor = normalizePubkey(del.author || del.authorHex)
       if (delAuthor !== "" && !(delAuthor === me || isQualified(delAuthor, allowList))) continue
@@ -647,7 +660,7 @@ function buildNostrPublish(localNotes, outbox, deletedMap, pendingDeletes) {
   })
   var tomb = sanitizeDeleted(deletedMap)
   var queue = Array.isArray(pendingDeletes)
-    ? pendingDeletes.map(normalizeText).filter(function (id) { return id !== "" && !!tomb[id] })
+    ? pendingDeletes.map(sanitizeId).filter(function (id) { return id !== "" && !!tomb[id] })
     : Object.keys(tomb)
   var deletes = queue.map(function (id) { return { ref: "del-" + id, noteId: id, deletedAt: tomb[id] } })
   return { notes: notes, comments: comments, deletes: deletes }
@@ -661,6 +674,7 @@ if (typeof module !== "undefined") {
     nowIso: nowIso,
     uid: uid,
     normalizeText: normalizeText,
+    isSafeId: isSafeId,
     parseAllowList: parseAllowList,
     isHexPubkey: isHexPubkey,
     normalizePubkey: normalizePubkey,

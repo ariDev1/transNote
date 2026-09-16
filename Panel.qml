@@ -43,6 +43,11 @@ Panel {
     return d
   }
   readonly property bool syncConfigured: syncDir !== ""
+  // LAN peer snapshots are untrusted synchronized input. Bound both file
+  // count and bytes before snapshot content reaches the QML collector.
+  readonly property int maxPeerFiles: 32
+  readonly property int maxPeerFileBytes: 2097152
+  readonly property int maxPeerAggregateBytes: 8388608
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/transnote"
   readonly property string notesPath: dataDir + "/notes.json"
@@ -333,10 +338,21 @@ Panel {
   // only, true deletes own + synced mirror (delete). Never use for
   // unshare — that must keep local bytes and drop only the mirror
   // (see toggleShare).
+  function queueSafeRemove(rootDir, targetDir) {
+    if (rootDir === "" || targetDir === "") return
+    // ID validation is the first boundary. Canonical containment is an
+    // independent second boundary before recursive deletion.
+    var script = "root=$(/usr/bin/realpath -m -- " + shellQuote(rootDir) + ") || exit 0; "
+      + "target=$(/usr/bin/realpath -m -- " + shellQuote(targetDir) + ") || exit 0; "
+      + "case \"$target\" in \"$root\"/*) /usr/bin/rm -rf -- \"$target\" ;; esac"
+    queueGc(["bash", "-c", script])
+  }
+
   function removeAttachDirs(noteId, includeSync) {
-    var dirs = [ownAttachSubdir(noteId)]
-    if (includeSync && syncAttachSubdir(noteId) !== "") dirs.push(syncAttachSubdir(noteId))
-    queueGc(["bash", "-c", "rm -rf " + dirs.map(shellQuote).join(" ") + " 2>/dev/null; true"])
+    if (!Store.isSafeId(noteId)) return
+    queueSafeRemove(localAttachDir, ownAttachSubdir(noteId))
+    var syncRoot = syncAttachDir()
+    if (includeSync && syncRoot !== "") queueSafeRemove(syncRoot, syncAttachSubdir(noteId))
   }
   // Fire-and-forget sidecar cleanup queue: gcProcess is a single shared
   // slot, so rapid consecutive deletes must queue instead of overwriting
@@ -2094,9 +2110,16 @@ Panel {
   }
 
   function applyPeerListing(output) {
+    var listing = String(output || "")
+    if (listing.indexOf("===TRANSNOTE_PEER_LIST_OVERFLOW===") !== -1) {
+      peerFiles = []
+      peerDebug = "peer scan rejected: too many JSON files"
+      fetchPeerSnapshots()
+      return
+    }
     var files = []
     var own = myId + ".json"
-    String(output || "").split("\n").forEach(function (line) {
+    listing.split("\n").forEach(function (line) {
       var name = line.trim()
       if (name.slice(-5) !== ".json" || name === own) return
       if (Store.isSyncArtifact(name)) return
@@ -2115,7 +2138,14 @@ Panel {
   function rescanPeers() {
     if (!syncConfigured) { peerFiles = []; return }
     if (!peerListProcess.running) {
-      peerListProcess.command = ["bash", "-c", "ls -1 " + shellQuote(syncDir) + " 2>/dev/null | grep '\\.json$' || true"]
+      var listScript = "count=0; overflow=0; "
+        + "while IFS= read -r name; do "
+        + "count=$((count + 1)); "
+        + "if [ \"$count\" -gt " + maxPeerFiles + " ]; then overflow=1; break; fi; "
+        + "printf '%s\\n' \"$name\"; "
+        + "done < <(/usr/bin/find " + shellQuote(syncDir) + " -maxdepth 1 -type f -name '*.json' -printf '%f\\n' 2>/dev/null); "
+        + "if [ \"$overflow\" -ne 0 ]; then printf '%s\\n' '===TRANSNOTE_PEER_LIST_OVERFLOW==='; fi"
+      peerListProcess.command = ["bash", "-c", listScript]
       peerListProcess.running = true
     }
   }
@@ -2132,10 +2162,26 @@ Panel {
       if (Object.keys(peerSnapshots).length > 0) { peerSnapshots = ({}); rebuildPeerNotes() }
       return
     }
-    var cmds = peerFiles.map(function (p, i) {
-      return "echo '===TRANSNOTEPEER:" + i + "==='; cat " + shellQuote(p) + " 2>/dev/null || echo READFAIL"
+    if (peerFiles.length > maxPeerFiles) {
+      peerFiles = []
+      peerDebug = "peer fetch rejected: too many JSON files"
+      return
+    }
+    var script = "total=0\n"
+      + "emit_peer() {\n"
+      + "  idx=\"$1\"; p=\"$2\"\n"
+      + "  printf '%s\\n' \"===TRANSNOTEPEER:${idx}===\"\n"
+      + "  size=$(/usr/bin/stat -Lc%s -- \"$p\" 2>/dev/null) || { printf '%s\\n' 'REJECTED:READFAIL'; return; }\n"
+      + "  case \"$size\" in ''|*[!0-9]*) printf '%s\\n' 'REJECTED:READFAIL'; return ;; esac\n"
+      + "  if [ \"$size\" -gt " + maxPeerFileBytes + " ]; then printf '%s\\n' 'REJECTED:FILE_BYTES'; return; fi\n"
+      + "  if [ $((total + size)) -gt " + maxPeerAggregateBytes + " ]; then printf '%s\\n' 'REJECTED:AGGREGATE_BYTES'; return; fi\n"
+      + "  total=$((total + size))\n"
+      + "  /usr/bin/head -c \"$size\" -- \"$p\" 2>/dev/null || printf '%s\\n' 'REJECTED:READFAIL'\n"
+      + "}\n"
+    peerFiles.forEach(function (p, i) {
+      script += "emit_peer " + i + " " + shellQuote(p) + "\n"
     })
-    peerFetchProcess.command = ["bash", "-c", cmds.join("\n")]
+    peerFetchProcess.command = ["bash", "-c", script]
     peerFetchProcess.running = true
   }
 
@@ -2157,7 +2203,7 @@ Panel {
     var next = {}
     peerFiles.forEach(function (p, i) {
       var c = chunks[i]
-      if (c === undefined || c.trim() === "" || c.trim() === "READFAIL") return
+      if (c === undefined || c.trim() === "" || c.trim().indexOf("REJECTED:") === 0) return
       next[p] = root.loadPeerSnapshot(c)
     })
     if (JSON.stringify(next) !== JSON.stringify(peerSnapshots)) peerSnapshots = next
