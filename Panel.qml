@@ -29,10 +29,24 @@ Panel {
   property string allowListSetting: String(setting("allowList", ""))
 
   property string detectedHostname: ""
+  function isSafeDeviceId(value) {
+    var id = Store.normalizeText(value)
+    return id !== ""
+      && id !== "."
+      && id !== ".."
+      && id[0] !== "."
+      && id.indexOf("/") === -1
+      && id.indexOf("\\") === -1
+      && id.indexOf("\0") === -1
+  }
+
   readonly property string myId: {
     var s = Store.normalizeText(deviceIdSetting)
-    if (s !== "") return s
-    if (detectedHostname !== "") return detectedHostname
+    if (isSafeDeviceId(s)) return s
+
+    var detected = Store.normalizeText(detectedHostname)
+    if (isSafeDeviceId(detected)) return detected
+
     return "local"
   }
   readonly property var allowList: Store.parseAllowList(allowListSetting)
@@ -110,6 +124,7 @@ Panel {
   //   (dot-dir, invisible to the *.json peer scan) and carried by whatever
   //   syncs the folder. Peers verify hash before trusting.
   readonly property string localAttachDir: dataDir + "/attachments"
+  readonly property string verifiedAttachDir: dataDir + "/verified-attachments"
   property var attachBusy: ({})    // noteId -> true while copying+hashing
   property var attachMsg: ({})     // noteId -> status/error text
   property var verifiedAtts: ({})  // "<noteId>/<attId>" -> waiting|ok|bad
@@ -132,14 +147,66 @@ Panel {
   // Byte location for one attachment: notes in the local file live
   // locally, everything else in the synced dot-dir. Membership (not the
   // author string) decides, so renamed-device notes keep working.
+  function attachmentSignature(att) {
+    if (!att) return ""
+
+    var name = String(att.name || "")
+    var size = Number(att.size)
+    var sha = String(att.sha256 || "").toLowerCase()
+
+    if (name === "" || !isFinite(size) || size < 0 || sha === "") return ""
+
+    return JSON.stringify([name, size, sha])
+  }
+
+  function currentPeerAttachmentSignature(key) {
+    var notes = allPeerNotes()
+
+    for (var i = 0; i < notes.length; i++) {
+      var note = notes[i]
+      if (!note) continue
+
+      var atts = note.attachments || []
+
+      for (var j = 0; j < atts.length; j++) {
+        var clean = Store.sanitizeAttachment(atts[j])
+        if (!clean) continue
+
+        if (note.id + "/" + clean.id === key) {
+          return attachmentSignature(clean)
+        }
+      }
+    }
+
+    return ""
+  }
+
   function attPathFor(note, att) {
-    if (!note || !att) return ""
-    var base = isLocalNote(note.id) ? ownAttachSubdir(note.id) : syncAttachSubdir(note.id)
-    if (base === "") return ""
-    return base + "/" + att.id + "-" + att.name
+    if (!note || !att || !Store.isSafeId(note.id)) return ""
+
+    var fileName = att.id + "-" + att.name
+
+    if (isLocalNote(note.id)) {
+      return ownAttachSubdir(note.id) + "/" + fileName
+    }
+
+    var key = note.id + "/" + att.id
+    var signature = attachmentSignature(att)
+
+    if (
+      signature === ""
+      || verifiedAtts[key] !== "ok"
+      || verifyJobs[key] !== signature
+    ) {
+      return ""
+    }
+
+    return verifiedAttachDir + "/" + note.id + "/" + fileName
   }
   function attUrl(path) {
-    return "file://" + String(path || "").split("/").map(encodeURIComponent).join("/")
+    var p = String(path || "")
+    if (p === "") return ""
+    return "file://" + p.split("/").map(encodeURIComponent).join("/")
   }
   function formatSize(b) {
     var n = Number(b) || 0
@@ -346,6 +413,41 @@ Panel {
     queueGc([envBin, "-i", "/usr/bin/python3", secureRemoveHelper, rootDir, noteId])
   }
 
+  function queueSafeUnlink(rootDir, noteId, fileName) {
+    if (rootDir === "" || !Store.isSafeId(noteId) || fileName === "") return
+    queueGc([
+      envBin,
+      "-i",
+      "/usr/bin/python3",
+      secureRemoveHelper,
+      "unlink",
+      rootDir,
+      noteId,
+      fileName
+    ])
+  }
+
+  function queueSafeCopy(sourcePath, rootDir, noteId, fileName) {
+    if (
+      sourcePath === ""
+      || rootDir === ""
+      || !Store.isSafeId(noteId)
+      || fileName === ""
+    ) return
+
+    queueGc([
+      envBin,
+      "-i",
+      "/usr/bin/python3",
+      secureRemoveHelper,
+      "copy",
+      sourcePath,
+      rootDir,
+      noteId,
+      fileName
+    ])
+  }
+
   function removeAttachDirs(noteId, includeSync) {
     if (!Store.isSafeId(noteId)) return
     queueSafeRemove(localAttachDir, noteId)
@@ -385,9 +487,9 @@ Panel {
         })
         localNotes[i].attachments = kept
         gone.forEach(function (g) {
-          queueGc(["bash", "-c",
-            "rm -f " + shellQuote(ownAttachSubdir(noteId) + "/" + g.id + "-" + g.name)
-            + " " + shellQuote(syncAttachSubdir(noteId) + "/" + g.id + "-" + g.name) + " 2>/dev/null; true"])
+          var fileName = g.id + "-" + g.name
+          queueSafeUnlink(localAttachDir, noteId, fileName)
+          queueSafeUnlink(syncAttachDir(), noteId, fileName)
         })
         touchLocalNotes()
         break
@@ -399,32 +501,103 @@ Panel {
   // waiting (still syncing), mismatch → bad. Runs after each peer fetch.
   function refreshAttachmentStates() {
     if (verifyProcess.running) return
+
+    var sourceRoot = syncAttachDir()
     var jobs = []
     var seen = {}
+
     allPeerNotes().forEach(function (n) {
-      if (!n) return
+      if (!n || !Store.isSafeId(n.id)) return
+
       ;(n.attachments || []).forEach(function (a) {
         var clean = Store.sanitizeAttachment(a)
         if (!clean) return
-        var p = attPathFor(n, clean)
-        if (p === "") return
+
         var key = n.id + "/" + clean.id
         if (seen[key]) return
         seen[key] = true
-        jobs.push({ key: key, path: p, sha: clean.sha256 })
+
+        var signature = attachmentSignature(clean)
+        if (signature === "") return
+
+        jobs.push({
+          key: key,
+          noteId: n.id,
+          fileName: clean.id + "-" + clean.name,
+          size: clean.size,
+          sha: clean.sha256,
+          signature: signature
+        })
       })
     })
-    if (jobs.length === 0) {
-      if (Object.keys(verifiedAtts).length > 0) verifiedAtts = ({})
-      return
-    }
-    var exp = {}
-    jobs.forEach(function (j) { exp[j.key] = j.sha })
-    verifyJobs = exp
-    var cmds = jobs.map(function (j) {
-      return "echo '===ATT:" + j.key + "==='; if test -f " + shellQuote(j.path)
-        + "; then printf 'HAVE '; sha256sum " + shellQuote(j.path) + " 2>/dev/null || echo READFAIL; else echo MISSING; fi"
+
+    // Keep an existing OK state only when it belongs to the exact metadata
+    // that is still current. This prevents an older successful job from
+    // authorizing new metadata with the same note/attachment IDs.
+    var retained = {}
+    jobs.forEach(function (j) {
+      if (
+        verifiedAtts[j.key] === "ok"
+        && verifyJobs[j.key] === j.signature
+      ) {
+        retained[j.key] = "ok"
+      }
     })
+
+    if (JSON.stringify(retained) !== JSON.stringify(verifiedAtts)) {
+      verifiedAtts = retained
+    }
+
+    var exp = {}
+    jobs.forEach(function (j) {
+      exp[j.key] = j.signature
+    })
+    verifyJobs = exp
+
+    // Prune runs in the same process sequence as verification. It cannot
+    // race a verification temporary file.
+    var pruneArgs = [
+      envBin,
+      "-i",
+      "/usr/bin/python3",
+      secureRemoveHelper,
+      "prune-verified",
+      verifiedAttachDir
+    ]
+
+    jobs.forEach(function (j) {
+      pruneArgs.push(j.noteId)
+      pruneArgs.push(j.fileName)
+      pruneArgs.push(String(j.size))
+      pruneArgs.push(j.sha)
+    })
+
+    var cmds = [
+      pruneArgs.map(function (arg) {
+        return shellQuote(arg)
+      }).join(" ")
+    ]
+
+    if (sourceRoot !== "") {
+      jobs.forEach(function (j) {
+        cmds.push(
+          "echo '===ATT:" + j.key + "==='; "
+          + shellQuote(envBin)
+          + " -i /usr/bin/python3 "
+          + shellQuote(secureRemoveHelper)
+          + " " + shellQuote("verify-copy")
+          + " " + shellQuote(sourceRoot)
+          + " " + shellQuote(j.noteId)
+          + " " + shellQuote(j.fileName)
+          + " " + shellQuote(String(j.size))
+          + " " + shellQuote(String(Store.MAX_ATTACHMENT_BYTES))
+          + " " + shellQuote(j.sha)
+          + " " + shellQuote(verifiedAttachDir)
+          + " || echo READFAIL"
+        )
+      })
+    }
+
     verifyProcess.command = ["bash", "-c", cmds.join("\n")]
     verifyProcess.running = true
   }
@@ -432,17 +605,34 @@ Panel {
     var next = {}
     var idx = ""
     var exp = verifyJobs
+
     String(output || "").split("\n").forEach(function (line) {
       var m = line.match(/^===ATT:(.*)===$/)
-      if (m) { idx = m[1]; return }
-      if (idx === "") return
-      if (line === "MISSING" || line === "READFAIL") next[idx] = "waiting"
-      else {
-        var h = line.match(/HAVE\s+([0-9a-f]{64})/)
-        next[idx] = (h && exp[idx] && h[1] === exp[idx].toLowerCase()) ? "ok" : "bad"
+      if (m) {
+        idx = m[1]
+        return
       }
+
+      if (idx === "") return
+
+      var current = currentPeerAttachmentSignature(idx)
+
+      // Ignore output from a job that belongs to older peer metadata.
+      if (!exp[idx] || current === "" || current !== exp[idx]) {
+        idx = ""
+        return
+      }
+
+      if (line === "VERIFIED") next[idx] = "ok"
+      else if (line === "BAD_SIZE" || line === "BAD_HASH") next[idx] = "bad"
+      else if (line === "MISSING" || line === "READFAIL") next[idx] = "waiting"
+
+      idx = ""
     })
-    if (JSON.stringify(next) !== JSON.stringify(verifiedAtts)) verifiedAtts = next
+
+    if (JSON.stringify(next) !== JSON.stringify(verifiedAtts)) {
+      verifiedAtts = next
+    }
   }
   function copyNoteFull(note) {
     if (!note || !note.id) return
@@ -679,7 +869,14 @@ Panel {
   }
   function saveSetupDevice() {
     var v = Store.normalizeText(setupDevice)
-    if (v === "") { setupMessage = "Give this machine a name first (e.g. laptop)."; return }
+    if (v === "") {
+      setupMessage = "Give this machine a name first (e.g. laptop)."
+      return
+    }
+    if (!isSafeDeviceId(v)) {
+      setupMessage = "Use a normal machine name without path characters."
+      return
+    }
     setupSaving = true
     setupMessage = "Saving name…"
     barSetDevice.command = [omarchyBin, "bar", "set", "aridev1.transnote", "deviceId", v]
@@ -1105,31 +1302,24 @@ Panel {
   // batch; cmp avoids rewrite churn that would re-trigger file sync).
   // Without this, peers get metadata with no bytes — hash "bad" forever.
   function mirrorSharedAttachments() {
-    if (!syncConfigured || mirrorProcess.running) return
-    var copies = []
+    if (!syncConfigured) return
+
     localNotes.forEach(function (n) {
-      if (!n || n.shared !== true) return
+      if (!n || n.shared !== true || !Store.isSafeId(n.id)) return
+
       ;(n.attachments || []).forEach(function (a) {
         var clean = Store.sanitizeAttachment(a)
         if (!clean) return
-        copies.push({
-          src: ownAttachSubdir(n.id) + "/" + clean.id + "-" + clean.name,
-          dst: syncAttachSubdir(n.id) + "/" + clean.id + "-" + clean.name
-        })
+
+        var fileName = clean.id + "-" + clean.name
+        queueSafeCopy(
+          ownAttachSubdir(n.id) + "/" + fileName,
+          syncAttachDir(),
+          n.id,
+          fileName
+        )
       })
     })
-    if (copies.length === 0) return
-    var cmds = ["mkdir -p " + shellQuote(syncAttachDir())]
-    copies.forEach(function (c) {
-      // Each unit swallows its own failure (missing src skips quietly) so
-      // one bad file never blocks the rest.
-      cmds.push("cmp -s " + shellQuote(c.src) + " " + shellQuote(c.dst)
-        + " || { mkdir -p " + shellQuote(c.dst.split("/").slice(0, -1).join("/"))
-        + " && cp -- " + shellQuote(c.src) + " " + shellQuote(c.dst)
-        + " && chmod 600 " + shellQuote(c.dst) + "; } || true")
-    })
-    mirrorProcess.command = ["bash", "-c", cmds.join("\n")]
-    mirrorProcess.running = true
   }
 
   function persist() {
@@ -1244,24 +1434,18 @@ Panel {
   function rebuildPeerNotes() {
     var all = []
     var pairs = []
-    var peerTomb = {}
     Object.keys(peerSnapshots).forEach(function (k) {
       var s = peerSnapshots[k]
       if (s) {
         all = all.concat(s.notes || [])
         pairs = pairs.concat(s.pairs || [])
-        peerTomb = Store.mergeDeleted(peerTomb, s.deleted || {})
       }
     })
-    // Delete-wins: merge peer tombstones into local state so a stale
-    // snapshot can never resurrect a deleted note, then filter everything.
-    var effective = Store.mergeDeleted(deletedIds, peerTomb)
-    if (JSON.stringify(effective) !== JSON.stringify(deletedIds)) {
-      deletedIds = effective
-      pendingDeletes = Object.keys(effective)
-    }
-    all = Store.filterDeletedNotes(all, effective)
-    pairs = pairs.filter(function (entry) { return entry && !Store.isDeleted(effective, entry.noteId) })
+    // LAN snapshots are untrusted peer state. Their tombstones must not
+    // modify this machine's local or Nostr deletion state. Local tombstones
+    // still suppress matching peer notes on this machine.
+    all = Store.filterDeletedNotes(all, deletedIds)
+    pairs = pairs.filter(function (entry) { return entry && !Store.isDeleted(deletedIds, entry.noteId) })
     // De-duplicate by note id, newest first; drop notes I authored (mine win).
     var mine = {}
     localNotes.forEach(function (n) { if (n) mine[n.id] = true })
@@ -1273,7 +1457,7 @@ Panel {
     peerNotes = Object.keys(byId).map(function (k) { return byId[k] })
     var fc = {}
     Object.keys(foreignComments || {}).forEach(function (k) {
-      if (!Store.isDeleted(effective, k)) fc[k] = foreignComments[k]
+      if (!Store.isDeleted(deletedIds, k)) fc[k] = foreignComments[k]
     })
     foreignComments = Store.mergeForeignComments(fc, pairs, allowList, myId)
     var pruned = Store.pruneOutbox(outbox, localNotes, allPeerNotes())
@@ -1568,10 +1752,7 @@ Panel {
         // tombstones the note so peers drop their copy and Nostr relays
         // serve the kind-5 deletion instead of the old ciphertext.
         if (!(localNotes[i].shared === true)) {
-          var syncOnly = syncAttachSubdir(id)
-          if (syncOnly !== "") {
-            queueGc(["bash", "-c", "rm -rf " + shellQuote(syncOnly) + " 2>/dev/null; true"])
-          }
+          queueSafeRemove(syncAttachDir(), id)
           localNotes[i].updatedAt = Store.nowIso()
           deletedIds = Store.addTombstone(deletedIds, id)
           if (pendingDeletes.indexOf(id) === -1) pendingDeletes = pendingDeletes.concat([id])
@@ -1857,12 +2038,6 @@ Panel {
     id: gcProcess
     running: false
     onExited: root.flushGc()
-  }
-
-  // Shared-sidecar mirror (see mirrorSharedAttachments).
-  Process {
-    id: mirrorProcess
-    running: false
   }
 
   // Peer attachment hash verification (stdout parsed by applyVerifyOutput).
@@ -2152,7 +2327,11 @@ Panel {
   function fetchPeerSnapshots() {
     if (peerFetchProcess.running) return
     if (!syncConfigured || peerFiles.length === 0) {
-      if (Object.keys(peerSnapshots).length > 0) { peerSnapshots = ({}); rebuildPeerNotes() }
+      if (Object.keys(peerSnapshots).length > 0) {
+        peerSnapshots = ({})
+        rebuildPeerNotes()
+      }
+      refreshAttachmentStates()
       return
     }
     if (peerFiles.length > maxPeerFiles) {
@@ -2160,21 +2339,23 @@ Panel {
       peerDebug = "peer fetch rejected: too many JSON files"
       return
     }
-    var script = "total=0\n"
-      + "emit_peer() {\n"
-      + "  idx=\"$1\"; p=\"$2\"\n"
-      + "  printf '%s\\n' \"===TRANSNOTEPEER:${idx}===\"\n"
-      + "  size=$(/usr/bin/stat -Lc%s -- \"$p\" 2>/dev/null) || { printf '%s\\n' 'REJECTED:READFAIL'; return; }\n"
-      + "  case \"$size\" in ''|*[!0-9]*) printf '%s\\n' 'REJECTED:READFAIL'; return ;; esac\n"
-      + "  if [ \"$size\" -gt " + maxPeerFileBytes + " ]; then printf '%s\\n' 'REJECTED:FILE_BYTES'; return; fi\n"
-      + "  if [ $((total + size)) -gt " + maxPeerAggregateBytes + " ]; then printf '%s\\n' 'REJECTED:AGGREGATE_BYTES'; return; fi\n"
-      + "  total=$((total + size))\n"
-      + "  /usr/bin/head -c \"$size\" -- \"$p\" 2>/dev/null || printf '%s\\n' 'REJECTED:READFAIL'\n"
-      + "}\n"
-    peerFiles.forEach(function (p, i) {
-      script += "emit_peer " + i + " " + shellQuote(p) + "\n"
+
+    var command = [
+      envBin,
+      "-i",
+      "/usr/bin/python3",
+      secureRemoveHelper,
+      "peer-read",
+      syncDir,
+      String(maxPeerFileBytes),
+      String(maxPeerAggregateBytes)
+    ]
+
+    peerFiles.forEach(function (p) {
+      command.push(String(p).split("/").pop())
     })
-    peerFetchProcess.command = ["bash", "-c", script]
+
+    peerFetchProcess.command = command
     peerFetchProcess.running = true
   }
 
@@ -2199,7 +2380,13 @@ Panel {
       if (c === undefined || c.trim() === "" || c.trim().indexOf("REJECTED:") === 0) return
       next[p] = root.loadPeerSnapshot(c)
     })
-    if (JSON.stringify(next) !== JSON.stringify(peerSnapshots)) peerSnapshots = next
+    var snapshotsChanged = JSON.stringify(next) !== JSON.stringify(peerSnapshots)
+    if (snapshotsChanged) {
+      peerSnapshots = next
+      // A changed peer snapshot invalidates authorization for previous
+      // trusted copies. Verification restores "ok" for current metadata.
+      verifiedAtts = ({})
+    }
     rebuildPeerNotes()
     refreshAttachmentStates()
   }
