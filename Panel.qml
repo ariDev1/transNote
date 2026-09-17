@@ -1228,8 +1228,10 @@ Panel {
   property bool localLoadFailed: false
 
   function refreshDisplay() {
-    var union = (localNotes || []).concat(peerNotes || []).concat(nostrPeerNotes || [])
-    union = Store.filterDeletedNotes(union, deletedIds)
+    // Tombstones retract synchronized copies. Local notes remain visible
+    // until deleteNote() removes them from localNotes.
+    var remote = Store.filterDeletedNotes((peerNotes || []).concat(nostrPeerNotes || []), deletedIds)
+    var union = (localNotes || []).concat(remote)
     var hidden = {}
     ;(hiddenIds || []).forEach(function (id) { if (id) hidden[Store.normalizeText(id)] = true })
     displayNotes = Store.sortNotes(union.filter(function (n) { return !!n && !hidden[n.id] }))
@@ -1377,7 +1379,10 @@ Panel {
         })
       }
     } catch (e) { console.warn("transnote", "Ignoring bad notes file", e) }
-    localNotes = Store.filterDeletedNotes(notes, tomb)
+    // Local notes are authoritative local data. Unshare keeps the local
+    // record and uses its tombstone only to retract synchronized copies.
+    // A real delete removes the record from notes before persist().
+    localNotes = notes
     outbox = box.filter(function (entry) { return entry && !Store.isDeleted(tomb, entry.noteId) })
     deletedIds = tomb
     hiddenIds = hid

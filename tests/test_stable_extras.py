@@ -98,10 +98,80 @@ class UnshareTombstoneTests(unittest.TestCase):
     def setUpClass(cls):
         cls.panel = PANEL.read_text()
 
+    def function_block(self, name, next_name):
+        start = self.panel.index(f"  function {name}(")
+        end = self.panel.index(f"\n  function {next_name}(", start)
+        return self.panel[start:end]
+
     def test_unshare_tombstones_and_reshare_clears(self):
         self.assertIn("tombstones the note so peers drop their copy", self.panel)
         self.assertIn("Re-sharing clears the tombstone", self.panel)
         self.assertIn("pendingDeletes.indexOf(id) === -1", self.panel)
+
+    def test_unshare_tombstone_filters_remote_notes_not_local_display(self):
+        body = self.function_block("refreshDisplay", "allPeerNotes")
+
+        self.assertIn(
+            "Store.filterDeletedNotes((peerNotes || []).concat(nostrPeerNotes || []), deletedIds)",
+            body,
+        )
+        self.assertIn(
+            "var union = (localNotes || []).concat(remote)",
+            body,
+        )
+        self.assertNotIn(
+            "Store.filterDeletedNotes(union, deletedIds)",
+            body,
+        )
+
+    def test_reload_keeps_local_note_when_unshare_tombstone_exists(self):
+        body = self.function_block("loadLocal", "migrateAuthors")
+
+        self.assertIn("localNotes = notes", body)
+        self.assertNotIn(
+            "localNotes = Store.filterDeletedNotes(notes, tomb)",
+            body,
+        )
+
+    def test_real_delete_still_removes_local_note_and_adds_tombstone(self):
+        body = self.function_block("deleteNote", "hideNote")
+
+        self.assertIn(
+            "localNotes = localNotes.filter(function (n) { return n && n.id !== clean })",
+            body,
+        )
+        self.assertIn(
+            "deletedIds = Store.addTombstone(deletedIds, clean)",
+            body,
+        )
+
+    def test_peer_notes_still_obey_local_tombstones(self):
+        body = self.function_block("rebuildPeerNotes", "loadNostrFetch")
+
+        self.assertIn(
+            "all = Store.filterDeletedNotes(all, deletedIds)",
+            body,
+        )
+
+    def test_lan_snapshot_still_retracts_unshared_note(self):
+        body = self.function_block("writeSnapshot", "mirrorSharedAttachments")
+
+        self.assertIn(
+            "var shared = localNotes.filter(function (n) { return n && n.shared === true })",
+            body,
+        )
+
+    def test_nostr_delete_path_stays_enabled(self):
+        body = self.function_block("loadNostrFetch", "refilterNostr")
+
+        self.assertIn(
+            "Store.sanitizeNostrFetch(root.nostrFetchRaw, nostrAllowList, root.myHex, deletedIds)",
+            body,
+        )
+        self.assertIn(
+            "deletedIds = Store.mergeDeleted(deletedIds, parsed.tombstones)",
+            body,
+        )
 
 
 class CleanupAndGuardTests(unittest.TestCase):
