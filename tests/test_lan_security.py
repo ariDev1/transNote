@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -266,16 +267,10 @@ class PanelSourceTests(unittest.TestCase):
 
 
 
-# TRANSNOTE_LAN_HARDENING_REVIEW_RED
-import pathlib as _review_pathlib
-import re as _review_re
-import unittest as _review_unittest
-
-
-class LanHardeningReviewRegressionTests(_review_unittest.TestCase):
+class LanHardeningRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = _review_pathlib.Path("Panel.qml").read_text(
+        cls.source = Path("Panel.qml").read_text(
             encoding="utf-8"
         )
 
@@ -297,7 +292,7 @@ class LanHardeningReviewRegressionTests(_review_unittest.TestCase):
         block = self.function_block("rebuildPeerNotes")
 
         self.assertIsNone(
-            _review_re.search(r"\beffective\b", block),
+            re.search(r"\beffective\b", block),
             "rebuildPeerNotes() still references removed 'effective' state",
         )
 

@@ -1,8 +1,10 @@
 import hashlib
+import importlib.util
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -417,30 +419,18 @@ class SecureRemoveTests(unittest.TestCase):
 
 
 
-# TRANSNOTE_SECURE_REMOVE_REVIEW_RED
-import hashlib as _review_hashlib
-import importlib.util as _review_importlib_util
-import os as _review_os
-import pathlib as _review_pathlib
-import subprocess as _review_subprocess
-import sys as _review_sys
-import tempfile as _review_tempfile
-import time as _review_time
-import unittest as _review_unittest
-
-
-class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
+class SecureRemoveRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        helper_path = _review_pathlib.Path(
+        helper_path = Path(
             "lan/secure_remove.py"
         ).resolve()
 
-        spec = _review_importlib_util.spec_from_file_location(
+        spec = importlib.util.spec_from_file_location(
             "transnote_secure_remove_review",
             helper_path,
         )
-        cls.helper = _review_importlib_util.module_from_spec(spec)
+        cls.helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.helper)
         cls.helper_path = helper_path
 
@@ -459,7 +449,7 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
         source = note_dir / file_name
         source.write_bytes(payload)
 
-        digest = _review_hashlib.sha256(payload).hexdigest()
+        digest = hashlib.sha256(payload).hexdigest()
 
         return (
             source_root,
@@ -495,8 +485,8 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
         )
 
     def test_verify_copy_does_not_rewrite_unchanged_trusted_file(self):
-        with _review_tempfile.TemporaryDirectory() as td:
-            base = _review_pathlib.Path(td)
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
             layout = self.make_attachment(base)
 
             rc = self.verify_copy(layout)
@@ -523,7 +513,7 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
 
             first = trusted.stat()
 
-            _review_time.sleep(0.05)
+            time.sleep(0.05)
 
             rc = self.verify_copy(layout)
             self.assertEqual(rc, 0)
@@ -542,8 +532,8 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
             )
 
     def test_bad_hash_creates_no_trusted_cache_payload(self):
-        with _review_tempfile.TemporaryDirectory() as td:
-            base = _review_pathlib.Path(td)
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
             layout = self.make_attachment(base)
 
             created = []
@@ -556,7 +546,7 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
                     else kwargs.get("flags", 0)
                 )
 
-                if flags & _review_os.O_CREAT:
+                if flags & os.O_CREAT:
                     created.append(args[0] if args else None)
 
                 return real_open(*args, **kwargs)
@@ -576,8 +566,8 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
             )
 
     def test_rejected_peer_json_consumes_aggregate_budget(self):
-        with _review_tempfile.TemporaryDirectory() as td:
-            root = _review_pathlib.Path(td)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
 
             bad = root / "bad.json"
             good = root / "good.json"
@@ -585,9 +575,9 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
             bad.write_bytes(b"\xff" * 8)
             good.write_bytes(b"{}")
 
-            proc = _review_subprocess.run(
+            proc = subprocess.run(
                 [
-                    _review_sys.executable,
+                    sys.executable,
                     str(self.helper_path),
                     "peer-read",
                     str(root),
@@ -613,8 +603,8 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
             )
 
     def test_prune_verified_removes_only_stale_cache_files(self):
-        with _review_tempfile.TemporaryDirectory() as td:
-            root = _review_pathlib.Path(td) / "verified"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "verified"
 
             keep_dir = root / "note-keep"
             stale_dir = root / "note-stale"
@@ -631,13 +621,13 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
             stale_same_note.write_bytes(b"stale")
             stale_other_note.write_bytes(b"stale")
 
-            keep_sha = _review_hashlib.sha256(
+            keep_sha = hashlib.sha256(
                 keep_payload
             ).hexdigest()
 
-            proc = _review_subprocess.run(
+            proc = subprocess.run(
                 [
-                    _review_sys.executable,
+                    sys.executable,
                     str(self.helper_path),
                     "prune-verified",
                     str(root),
@@ -670,13 +660,13 @@ class SecureRemoveReviewRegressionTests(_review_unittest.TestCase):
             )
 
     def test_prune_verified_rejects_test_only_path_entry_shape(self):
-        with _review_tempfile.TemporaryDirectory() as td:
-            root = _review_pathlib.Path(td) / "verified"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "verified"
             root.mkdir()
 
-            proc = _review_subprocess.run(
+            proc = subprocess.run(
                 [
-                    _review_sys.executable,
+                    sys.executable,
                     str(self.helper_path),
                     "prune-verified",
                     str(root),
