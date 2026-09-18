@@ -649,6 +649,10 @@ Panel {
   // Visible section of the panel (the card is capped at 520px with no
   // scrolling, so Notes and Share take turns instead of stacking).
   property string panelView: "notes"
+  // Compose box is collapsed by default so the note list owns the panel.
+  // Opens via the New-note toggle, "/" shortcut, or automatically when
+  // there is nothing to read yet. Closes on Add/Cancel.
+  property bool composeOpen: false
   // Folder-sync setup wizard (no terminal): drafts for the three widget
   // settings. Saved through the official `omarchy bar set` writer, so the
   // shell persists + hot-reloads them safely — the panel never edits
@@ -1184,7 +1188,8 @@ Panel {
       var c2 = cursorNote()
       if (c2 && isLocalNote(c2.id)) cycleColor(c2.id)
     } else if (t === "/") {
-      if (noteTitleField) noteTitleField.forceActiveFocus()
+      if (!composeOpen) composeOpen = true
+      Qt.callLater(function () { if (noteTitleField) noteTitleField.forceActiveFocus() })
     }
   }
   function scrollCursorIntoView() {
@@ -1687,6 +1692,7 @@ Panel {
     if (noteTitleField) noteTitleField.text = ""
     if (noteBodyField) noteBodyField.text = ""
     selectedNoteId = note.id
+    composeOpen = false
     persist()
   }
 
@@ -2434,8 +2440,9 @@ Panel {
   onMyIdChanged: root.migrateAuthors()
   onDisplayNotesChanged: {
     if (noteCursor >= displayNotes.length) noteCursor = displayNotes.length - 1
+    if (displayNotes.length === 0) composeOpen = true
   }
-  onOpenedChanged: { if (opened) root.markAllRead() }
+  onOpenedChanged: { if (opened) { root.markAllRead(); if (displayNotes.length === 0) composeOpen = true } }
   onMyHexChanged: { root.refilterNostr(); root.updateNetStatus() }
   onFriendsChanged: { root.refilterNostr(); root.updateNetStatus() }
 
@@ -2541,22 +2548,26 @@ Panel {
       width: panelFlick.width
       spacing: Style.space(10)
 
-      // ---- section tabs: only one view fits the card, pick one ----
+      // ---- section tabs: first slot is contextual (Ubuntu optics) ----
+      // Notes view: [New note | Share | Setup]. Other views: [Notes | Share | Setup].
       RowLayout {
         width: parent.width
         spacing: Style.space(6)
         Button {
           Layout.fillWidth: true
-          text: "Notes"
+          text: root.panelView === "notes" ? (root.composeOpen ? "Cancel" : "New note…") : "Notes"
           foreground: root.foreground
           fontFamily: root.fontFamily
           bordered: true
-          selected: root.panelView === "notes"
-          onClicked: root.panelView = "notes"
+          selected: root.panelView === "notes" ? root.composeOpen : false
+          onClicked: {
+            if (root.panelView === "notes") root.composeOpen = !root.composeOpen
+            else root.panelView = "notes"
+          }
         }
         Button {
           Layout.fillWidth: true
-          text: "Share 🌐"
+          text: "Share"
           foreground: root.foreground
           fontFamily: root.fontFamily
           bordered: true
@@ -2608,7 +2619,12 @@ Panel {
         onClicked: root.openSetup()
       }
 
-      // ---- new note ----
+      // ---- composer (opened from the tab slot above) ----
+      Column {
+        width: parent.width
+        spacing: Style.space(10)
+        visible: root.composeOpen
+        height: visible ? implicitHeight : 0
       TextField {
         id: noteTitleField
         width: parent.width
@@ -2647,13 +2663,27 @@ Panel {
         }
       } // TextArea
       } // composeScroll
-      Button {
-        text: "Add note"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        bordered: true
-        onClicked: root.addNote()
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(6)
+        Button {
+          Layout.fillWidth: true
+          text: "Add note"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.addNote()
+        }
+        Button {
+          Layout.fillWidth: true
+          text: "Cancel"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: root.composeOpen = false
+        }
       }
+      } // compose wrapper
 
       PanelSeparator { foreground: root.foreground; width: parent.width }
 
@@ -2661,8 +2691,8 @@ Panel {
       // pushing the panel out of rails ----
       Text {
         width: parent.width
-        visible: root.displayNotes.length === 0
-        text: "No notes yet — write the first one above."
+        visible: root.displayNotes.length === 0 && !root.composeOpen
+        text: "No notes yet — press New note to write one."
         color: Qt.darker(root.foreground, 1.4)
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
