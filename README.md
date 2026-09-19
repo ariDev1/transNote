@@ -54,6 +54,24 @@ LAN folder synchronization does not require Node.js or Nostr.
 
 Syncthing is recommended for LAN synchronization, but it is not required. Any tool that reliably synchronizes the selected folder can be used.
 
+## Tested compatibility
+
+The TransNote `0.5.6` release candidate has runtime acceptance evidence for this exact environment:
+
+- TransNote runtime baseline: `184036235f064281533a631aa70c794e62ea96f4`
+- Omarchy `4.0.4-1`
+- Quickshell `0.3.1`
+- `x86_64`
+- Linux kernel `7.2.5-3-omarchy`
+- Wayland
+- Hyprland
+- single display at `1920x1080`, scale `1.25`, `60 Hz`
+- AMD Lucienne graphics
+
+This is a tested compatibility scope. It is not a claim that other configurations are incompatible.
+
+The `0.5.6` acceptance scope did not include X11, multi-monitor configurations, other architectures, or other display scaling values.
+
 ## Installation
 
 Install and enable TransNote directly from GitHub:
@@ -649,6 +667,20 @@ package-lock.json
 
 `package-lock.json`
 : Locked npm dependency versions and integrity hashes.
+
+## Support and security
+
+For normal bugs, compatibility reports, and support requests, use:
+
+```text
+https://github.com/ariDev1/transNote/issues
+```
+
+For security reports, follow [`SECURITY.md`](SECURITY.md). Do not publish sensitive vulnerability details in a public issue.
+
+Third-party runtime dependency and bundled-license information is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Preview capture procedure and reference display conditions are in [`docs/preview-capture.md`](docs/preview-capture.md).
 
 ## License
 
