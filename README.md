@@ -279,6 +279,104 @@ TransNote supports keyboard-first operation.
 
 When a text field has focus, normal typing is passed to that field.
 
+
+## Optional Agent CLI
+
+TransNote includes an optional local command-line interface for AI agents and other local automation.
+
+The normal Omarchy plugin installation stays passive. The Agent CLI is not added to your PATH automatically.
+
+Install it explicitly:
+
+```bash
+./tools/install-agent-cli.sh
+```
+
+This creates:
+
+```text
+~/.local/bin/transnote-agent
+```
+
+Remove only the CLI link with:
+
+```bash
+./tools/uninstall-agent-cli.sh
+```
+
+The installer and uninstaller use only the current user account. They do not change shell configuration or TransNote data.
+
+### Commands
+
+Check the running TransNote instance:
+
+```bash
+transnote-agent status
+```
+
+List visible notes:
+
+```bash
+transnote-agent list
+```
+
+Search visible note titles and bodies:
+
+```bash
+transnote-agent search "measurement"
+```
+
+Create a local note:
+
+```bash
+transnote-agent create \
+  --title "Test result" \
+  --body "Measurement complete"
+```
+
+Add a comment to a visible note:
+
+```bash
+transnote-agent comment NOTE_ID \
+  --text "Confirmed"
+```
+
+Agent responses use one JSON object per invocation.
+
+The current protocol version is `1`. Each valid TransNote response includes:
+
+```text
+protocolVersion
+```
+
+Exit codes are:
+
+- `0` — command completed successfully
+- `2` — invalid command or invalid argument
+- `3` — TransNote runtime is unavailable or not ready
+- `4` — requested TransNote object was not found
+- `5` — protocol or response error
+
+Notes created through the CLI are private by default. The CLI does not share them.
+
+The CLI uses the existing local TransNote identity. It does not accept an author override.
+
+The first Agent CLI intentionally does not expose:
+
+- delete
+- share or unshare
+- hide
+- LAN pairing
+- synchronization administration
+- attachment mutation
+- arbitrary filesystem access
+- arbitrary command forwarding
+
+The Agent CLI is a restricted TransNote capability. It is not a sandbox.
+
+An AI agent that already has full shell access can bypass this CLI and access other user-level resources directly. Give an agent the `transnote-agent` capability when you want a restricted TransNote interface. Do not treat the CLI as isolation from an unrestricted local shell.
+
+
 ## Data and privacy
 
 TransNote stores its local data below:
@@ -410,10 +508,14 @@ Then restart or reopen TransNote.
 
 ```text
 Panel.qml
+Agent.js
 Store.js
+bin/transnote-agent
 nostr/sync.mjs
 nostr/sync.bundle.mjs
 tools/build_nostr_bundle.sh
+tools/install-agent-cli.sh
+tools/uninstall-agent-cli.sh
 manifest.json
 package.json
 package-lock.json
@@ -421,6 +523,12 @@ package-lock.json
 
 `Panel.qml`
 : Omarchy / Quickshell user interface and runtime integration.
+
+`Agent.js`
+: Pure serialization and search helpers for the restricted Agent CLI interface.
+
+`bin/transnote-agent`
+: Local JSON command-line client for the restricted TransNote IPC target.
 
 `Store.js`
 : Note, comment, peer, attachment, and validation logic.
@@ -433,6 +541,12 @@ package-lock.json
 
 `tools/build_nostr_bundle.sh`
 : Development-only script that generates the committed runtime bundle.
+
+`tools/install-agent-cli.sh`
+: Optional user-level Agent CLI installer.
+
+`tools/uninstall-agent-cli.sh`
+: Optional user-level Agent CLI removal script.
 
 `manifest.json`
 : Omarchy plugin manifest.

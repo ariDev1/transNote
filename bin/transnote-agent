@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+
+import json
+import subprocess
+import sys
+
+
+IPC_TARGET = "aridev1.transnote.agent"
+PROTOCOL_VERSION = 1
+
+EXIT_USAGE = 2
+EXIT_UNAVAILABLE = 3
+EXIT_DOMAIN = 4
+EXIT_PROTOCOL = 5
+
+
+def emit(payload, code=0):
+    print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+    raise SystemExit(code)
+
+
+def error(code, message, exit_code):
+    emit(
+        {
+            "ok": False,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        },
+        exit_code,
+    )
+
+
+def call_ipc(method, *arguments):
+    argv = [
+        "omarchy-shell",
+        IPC_TARGET,
+        method,
+        *arguments,
+    ]
+
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        error(
+            "TRANSNOTE_UNAVAILABLE",
+            "TransNote IPC is unavailable",
+            EXIT_UNAVAILABLE,
+        )
+
+    if result.returncode != 0:
+        error(
+            "TRANSNOTE_UNAVAILABLE",
+            "TransNote IPC is unavailable",
+            EXIT_UNAVAILABLE,
+        )
+
+    raw = result.stdout.strip()
+
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        error(
+            "PROTOCOL_ERROR",
+            "TransNote returned invalid JSON",
+            EXIT_PROTOCOL,
+        )
+
+    if not isinstance(payload, dict):
+        error(
+            "PROTOCOL_ERROR",
+            "TransNote returned an invalid response",
+            EXIT_PROTOCOL,
+        )
+
+    if payload.get("protocolVersion") != PROTOCOL_VERSION:
+        error(
+            "PROTOCOL_ERROR",
+            "TransNote agent protocol version mismatch",
+            EXIT_PROTOCOL,
+        )
+
+    if payload.get("ok") is True:
+        emit(payload, 0)
+
+    if payload.get("ok") is not False:
+        error(
+            "PROTOCOL_ERROR",
+            "TransNote returned an invalid response",
+            EXIT_PROTOCOL,
+        )
+
+    remote_error = payload.get("error")
+    if not isinstance(remote_error, dict):
+        error(
+            "PROTOCOL_ERROR",
+            "TransNote returned an invalid error response",
+            EXIT_PROTOCOL,
+        )
+
+    code = remote_error.get("code")
+    message = remote_error.get("message")
+
+    if not isinstance(code, str) or not isinstance(message, str):
+        error(
+            "PROTOCOL_ERROR",
+            "TransNote returned an invalid error response",
+            EXIT_PROTOCOL,
+        )
+
+    if code in {
+        "EMPTY_NOTE",
+        "EMPTY_COMMENT",
+        "INVALID_ARGUMENT",
+        "MISSING_ARGUMENT",
+        "UNKNOWN_OPTION",
+        "UNKNOWN_COMMAND",
+    }:
+        emit(payload, EXIT_USAGE)
+
+    if code in {
+        "TRANSNOTE_NOT_READY",
+        "TRANSNOTE_UNAVAILABLE",
+    }:
+        emit(payload, EXIT_UNAVAILABLE)
+
+    if code == "NOTE_NOT_FOUND":
+        emit(payload, EXIT_DOMAIN)
+
+    emit(payload, EXIT_PROTOCOL)
+
+
+def parse_create(args):
+    title = ""
+    body = ""
+    seen = set()
+    index = 0
+
+    while index < len(args):
+        option = args[index]
+
+        if option not in ("--title", "--body"):
+            error(
+                "UNKNOWN_OPTION",
+                f"unknown option: {option}",
+                EXIT_USAGE,
+            )
+
+        if option in seen:
+            error(
+                "INVALID_ARGUMENT",
+                f"duplicate option: {option}",
+                EXIT_USAGE,
+            )
+
+        if index + 1 >= len(args):
+            error(
+                "MISSING_ARGUMENT",
+                f"missing value for {option}",
+                EXIT_USAGE,
+            )
+
+        seen.add(option)
+        value = args[index + 1]
+
+        if option == "--title":
+            title = value
+        else:
+            body = value
+
+        index += 2
+
+    if not title.strip() and not body.strip():
+        error(
+            "EMPTY_NOTE",
+            "title and body cannot both be empty",
+            EXIT_USAGE,
+        )
+
+    call_ipc("create", title, body)
+
+
+def parse_comment(args):
+    if not args:
+        error(
+            "MISSING_ARGUMENT",
+            "missing note id",
+            EXIT_USAGE,
+        )
+
+    note_id = args[0]
+
+    if len(args) != 3:
+        if len(args) >= 2 and args[1].startswith("--") and args[1] != "--text":
+            error(
+                "UNKNOWN_OPTION",
+                f"unknown option: {args[1]}",
+                EXIT_USAGE,
+            )
+
+        error(
+            "MISSING_ARGUMENT",
+            "comment requires --text",
+            EXIT_USAGE,
+        )
+
+    if args[1] != "--text":
+        error(
+            "UNKNOWN_OPTION",
+            f"unknown option: {args[1]}",
+            EXIT_USAGE,
+        )
+
+    text = args[2]
+
+    if not text.strip():
+        error(
+            "EMPTY_COMMENT",
+            "comment cannot be empty",
+            EXIT_USAGE,
+        )
+
+    call_ipc("comment", note_id, text)
+
+
+def main():
+    args = sys.argv[1:]
+
+    if not args:
+        error(
+            "MISSING_ARGUMENT",
+            "missing command",
+            EXIT_USAGE,
+        )
+
+    command = args[0]
+    rest = args[1:]
+
+    if command == "status":
+        if rest:
+            error(
+                "INVALID_ARGUMENT",
+                "status takes no arguments",
+                EXIT_USAGE,
+            )
+        call_ipc("status")
+
+    if command == "list":
+        if rest:
+            error(
+                "INVALID_ARGUMENT",
+                "list takes no arguments",
+                EXIT_USAGE,
+            )
+        call_ipc("list")
+
+    if command == "search":
+        if len(rest) != 1:
+            error(
+                "MISSING_ARGUMENT",
+                "search requires one query",
+                EXIT_USAGE,
+            )
+
+        if not rest[0].strip():
+            error(
+                "INVALID_ARGUMENT",
+                "search query cannot be empty",
+                EXIT_USAGE,
+            )
+
+        call_ipc("search", rest[0])
+
+    if command == "create":
+        parse_create(rest)
+
+    if command == "comment":
+        parse_comment(rest)
+
+    error(
+        "UNKNOWN_COMMAND",
+        f"unknown command: {command}",
+        EXIT_USAGE,
+    )
+
+
+if __name__ == "__main__":
+    main()

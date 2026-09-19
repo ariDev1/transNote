@@ -6,6 +6,7 @@ import Quickshell.Io
 import qs.Ui
 import qs.Commons
 import "Store.js" as Store
+import "Agent.js" as Agent
 
 // TransNote: fast shared text notes.
 // - Many notes, each with comments.
@@ -2460,6 +2461,243 @@ Panel {
 
   onPeerDebugChanged: {
     if (peerDebug !== "") peerDebugFile.setText(peerDebug + "\n")
+  }
+
+  // --------------------------------------------------------- agent API
+  // Restricted local interface for explicit AI-agent access.
+  // The agent receives only already-qualified, visible TransNote state.
+  // Storage, sync, pairing, sharing, deletion, and attachments are not
+  // exposed through this interface.
+
+  function agentResponse(payload) {
+    payload.protocolVersion = Agent.PROTOCOL_VERSION
+    return JSON.stringify(payload)
+  }
+
+  function agentError(code, message) {
+    return agentResponse({
+      ok: false,
+      error: {
+        code: code,
+        message: message
+      }
+    })
+  }
+
+  function agentReady() {
+    return localLoaded && !localLoadFailed
+  }
+
+  function agentSourceForNote(noteId) {
+    if (isLocalNote(noteId)) return "local"
+
+    for (var i = 0; i < (peerNotes || []).length; i++) {
+      if (peerNotes[i] && peerNotes[i].id === noteId) return "lan"
+    }
+
+    for (var j = 0; j < (nostrPeerNotes || []).length; j++) {
+      if (nostrPeerNotes[j] && nostrPeerNotes[j].id === noteId) return "nostr"
+    }
+
+    return ""
+  }
+
+  function agentVisibleNote(noteId) {
+    var clean = Store.normalizeText(noteId)
+    if (clean === "") return null
+
+    for (var i = 0; i < (displayNotes || []).length; i++) {
+      if (displayNotes[i] && displayNotes[i].id === clean) return displayNotes[i]
+    }
+
+    return null
+  }
+
+  function agentNoteView(note) {
+    if (!note) return null
+
+    return {
+      id: note.id,
+      title: note.title,
+      body: note.body,
+      author: note.author,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      shared: note.shared === true,
+      comments: commentsFor(note.id)
+    }
+  }
+
+  function agentListJson() {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var notes = []
+
+    ;(displayNotes || []).forEach(function (note) {
+      if (!note) return
+
+      var clean = Agent.serializeNote(
+        agentNoteView(note),
+        agentSourceForNote(note.id)
+      )
+
+      if (clean) notes.push(clean)
+    })
+
+    return agentResponse({
+      ok: true,
+      notes: notes
+    })
+  }
+
+  function agentSearchJson(query) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    query = Store.normalizeText(query)
+    if (query === "") {
+      return agentError("INVALID_ARGUMENT", "search query cannot be empty")
+    }
+
+    var matches = Agent.searchNotes(displayNotes, query)
+    var notes = []
+
+    matches.forEach(function (note) {
+      var clean = Agent.serializeNote(
+        agentNoteView(note),
+        agentSourceForNote(note.id)
+      )
+
+      if (clean) notes.push(clean)
+    })
+
+    return agentResponse({
+      ok: true,
+      query: query,
+      notes: notes
+    })
+  }
+
+  function agentCreateJson(title, body) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    title = Store.normalizeText(title)
+    body = Store.normalizeText(body)
+
+    if (title === "" && body === "") {
+      return agentError("EMPTY_NOTE", "title and body cannot both be empty")
+    }
+
+    var note = Store.createNote(title, body, myId)
+    localNotes = [note].concat(localNotes)
+    persist()
+
+    return agentResponse({
+      ok: true,
+      note: Agent.serializeNote(
+        agentNoteView(note),
+        "local"
+      )
+    })
+  }
+
+  function agentCommentJson(noteId, text) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var visible = agentVisibleNote(noteId)
+    if (!visible) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    text = Store.normalizeText(text)
+    if (text === "") {
+      return agentError("EMPTY_COMMENT", "comment cannot be empty")
+    }
+
+    var comment = null
+
+    if (isLocalNote(visible.id)) {
+      var ownNote = null
+
+      for (var i = 0; i < localNotes.length; i++) {
+        if (localNotes[i] && localNotes[i].id === visible.id) {
+          ownNote = localNotes[i]
+          break
+        }
+      }
+
+      if (!ownNote) {
+        return agentError("NOTE_NOT_FOUND", "note was not found")
+      }
+
+      comment = Store.addComment(ownNote, myId, text)
+      touchLocalNotes()
+    } else {
+      comment = Store.createComment(myId, text)
+      if (comment) {
+        outbox = outbox.concat([{
+          noteId: visible.id,
+          comment: comment
+        }])
+      }
+    }
+
+    if (!comment) {
+      return agentError("EMPTY_COMMENT", "comment cannot be empty")
+    }
+
+    persist()
+
+    return agentResponse({
+      ok: true,
+      noteId: visible.id,
+      comment: Agent.serializeComment(comment)
+    })
+  }
+
+  function agentStatusJson() {
+    return agentResponse({
+      ok: true,
+      status: {
+        ready: agentReady(),
+        identity: myId,
+        syncConfigured: syncConfigured,
+        localNoteCount: (localNotes || []).length,
+        remoteNoteCount: (peerNotes || []).length + (nostrPeerNotes || []).length,
+        visibleNoteCount: displayNotes.length
+      }
+    })
+  }
+
+  IpcHandler {
+    target: "aridev1.transnote.agent"
+
+    function status(): string {
+      return root.agentStatusJson()
+    }
+
+    function list(): string {
+      return root.agentListJson()
+    }
+
+    function search(query: string): string {
+      return root.agentSearchJson(query)
+    }
+
+    function create(title: string, body: string): string {
+      return root.agentCreateJson(title, body)
+    }
+
+    function comment(noteId: string, text: string): string {
+      return root.agentCommentJson(noteId, text)
+    }
   }
 
   // ---------------------------------------------------------------- IPC
