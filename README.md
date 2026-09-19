@@ -405,6 +405,71 @@ The Agent CLI is a restricted TransNote capability. It is not a sandbox.
 An AI agent that already has full shell access can bypass this CLI and access other user-level resources directly. Give an agent the `transnote-agent` capability when you want a restricted TransNote interface. Do not treat the CLI as isolation from an unrestricted local shell.
 
 
+### OpenCode adapter
+
+TransNote includes an optional restricted OpenCode adapter under:
+
+```text
+tools/opencode/
+```
+
+The adapter exposes only these dedicated custom tools:
+
+```text
+transnote_status
+transnote_list
+transnote_search
+transnote_create
+transnote_comment
+transnote_share
+```
+
+The OpenCode profile denies all other capabilities by default. It allows only the six named TransNote tools and the user-question tool. General shell access, filesystem tools, Git, web access, and subagents remain denied.
+
+The custom tools call the fixed `~/.local/bin/transnote-agent` executable with an argument array. They do not use a shell. The adapter preflight checks this same fixed executable path.
+
+`transnote_create` creates a private note. `transnote_share` accepts only one note ID. The adapter must use `transnote_share` only when the user explicitly asks to share or publish the note. The TransNote core still verifies that the target is a visible local Agent-created note.
+
+Install the OpenCode adapter explicitly:
+
+```bash
+./tools/opencode/install.sh
+```
+
+The adapter supports the OpenCode V1 permission model. An unknown major version fails closed. A new or changed OpenCode version is not trusted until the permission-boundary acceptance test passes.
+
+The non-mutating permission test is stored at:
+
+```text
+tools/opencode/security-test.txt
+```
+
+Run that test with the restricted TransNote agent. After it passes, record the exact tested OpenCode version:
+
+```bash
+./tools/opencode/mark-tested.sh --accept-security-test
+```
+
+Start the restricted agent only through:
+
+```bash
+./tools/opencode/run.sh
+```
+
+A separate state-transition field test for explicit Share intent is stored at:
+
+```text
+tools/opencode/share-test.txt
+```
+
+That test uses two separate user messages. The first message creates a private Agent note. The second message explicitly requests Share. This proves that creation and sharing remain separate state transitions.
+
+Remove the adapter with:
+
+```bash
+./tools/opencode/uninstall.sh
+```
+
 ## Data and privacy
 
 TransNote stores its local data below:
