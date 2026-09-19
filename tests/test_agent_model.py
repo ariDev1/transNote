@@ -178,7 +178,7 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
 
         self.assertEqual(
             list(out.keys()),
-            ["commands", "unsupported"],
+            ["commands", "errorExitCodes", "unsupported"],
         )
 
         self.assertEqual(
@@ -196,15 +196,27 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
 
         self.assertEqual(
             out["commands"]["status"],
-            {"mutates": False, "arguments": []},
+            {
+                "mutates": False,
+                "arguments": [],
+                "errors": [],
+            },
         )
         self.assertEqual(
             out["commands"]["capabilities"],
-            {"mutates": False, "arguments": []},
+            {
+                "mutates": False,
+                "arguments": [],
+                "errors": [],
+            },
         )
         self.assertEqual(
             out["commands"]["list"],
-            {"mutates": False, "arguments": []},
+            {
+                "mutates": False,
+                "arguments": [],
+                "errors": ["TRANSNOTE_NOT_READY"],
+            },
         )
         self.assertEqual(
             out["commands"]["get"],
@@ -215,11 +227,15 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                         "name": "noteId",
                         "kind": "positional",
                         "required": True,
+                        "nonEmpty": True,
                     }
+                ],
+                "errors": [
+                    "TRANSNOTE_NOT_READY",
+                    "NOTE_NOT_FOUND",
                 ],
             },
         )
-
         self.assertEqual(
             out["commands"]["search"],
             {
@@ -229,11 +245,15 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                         "name": "query",
                         "kind": "positional",
                         "required": True,
+                        "nonEmpty": True,
                     }
+                ],
+                "errors": [
+                    "TRANSNOTE_NOT_READY",
+                    "INVALID_ARGUMENT",
                 ],
             },
         )
-
         self.assertEqual(
             out["commands"]["create"],
             {
@@ -252,9 +272,18 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                         "required": False,
                     },
                 ],
+                "constraints": [
+                    {
+                        "kind": "atLeastOneNonEmpty",
+                        "arguments": ["title", "body"],
+                    }
+                ],
+                "errors": [
+                    "TRANSNOTE_NOT_READY",
+                    "EMPTY_NOTE",
+                ],
             },
         )
-
         self.assertEqual(
             out["commands"]["comment"],
             {
@@ -264,14 +293,37 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                         "name": "noteId",
                         "kind": "positional",
                         "required": True,
+                        "nonEmpty": True,
                     },
                     {
                         "name": "text",
                         "kind": "option",
                         "flag": "--text",
                         "required": True,
+                        "nonEmpty": True,
                     },
                 ],
+                "errors": [
+                    "TRANSNOTE_NOT_READY",
+                    "NOTE_NOT_FOUND",
+                    "EMPTY_COMMENT",
+                ],
+            },
+        )
+
+        self.assertEqual(
+            out["errorExitCodes"],
+            {
+                "MISSING_ARGUMENT": 2,
+                "INVALID_ARGUMENT": 2,
+                "UNKNOWN_OPTION": 2,
+                "UNKNOWN_COMMAND": 2,
+                "EMPTY_NOTE": 2,
+                "EMPTY_COMMENT": 2,
+                "TRANSNOTE_NOT_READY": 3,
+                "TRANSNOTE_UNAVAILABLE": 3,
+                "NOTE_NOT_FOUND": 4,
+                "PROTOCOL_ERROR": 5,
             },
         )
 

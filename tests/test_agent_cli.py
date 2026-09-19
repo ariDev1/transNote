@@ -389,5 +389,17 @@ raise SystemExit(exit_code)
 
         self.assertEqual(result.returncode, 4)
 
+
+    def test_local_errors_include_protocol_version(self):
+        result = self.invoke("get")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "MISSING_ARGUMENT")
+        self.assertEqual(out["protocolVersion"], PROTOCOL_VERSION)
+
 if __name__ == "__main__":
     unittest.main()

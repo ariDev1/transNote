@@ -314,10 +314,22 @@ Check the running TransNote instance:
 transnote-agent status
 ```
 
+Inspect the machine-readable v1 command contract:
+
+```bash
+transnote-agent capabilities
+```
+
 List visible notes:
 
 ```bash
 transnote-agent list
+```
+
+Read one visible note by ID:
+
+```bash
+transnote-agent get NOTE_ID
 ```
 
 Search visible note titles and bodies:
@@ -348,6 +360,10 @@ The current protocol version is `1`. Each valid TransNote response includes:
 ```text
 protocolVersion
 ```
+
+Every CLI JSON result, including locally generated errors, includes `protocolVersion`.
+
+The `capabilities` response describes non-empty argument requirements, the `create` rule that at least one of `title` or `body` must be non-empty, expected command errors, and the stable CLI error-to-exit-code mapping.
 
 Exit codes are:
 

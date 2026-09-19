@@ -23,7 +23,9 @@ class AgentDocumentationTests(unittest.TestCase):
     def test_readme_documents_supported_commands(self):
         for command in (
             "transnote-agent status",
+            "transnote-agent capabilities",
             "transnote-agent list",
+            "transnote-agent get",
             "transnote-agent search",
             "transnote-agent create",
             "transnote-agent comment",
@@ -75,6 +77,15 @@ class AgentDocumentationTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(path, self.text)
 
+
+
+    def test_readme_documents_machine_readable_contract_constraints(self):
+        self.assertIn("non-empty", self.lower)
+        self.assertIn("at least one", self.lower)
+        self.assertIn("expected command errors", self.lower)
+
+    def test_readme_states_protocol_version_is_on_errors_too(self):
+        self.assertIn("including locally generated errors", self.lower)
 
 if __name__ == "__main__":
     unittest.main()

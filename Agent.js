@@ -145,31 +145,46 @@ function capabilities() {
     commands: {
       status: {
         mutates: false,
-        arguments: []
+        arguments: [],
+        errors: []
       },
       capabilities: {
         mutates: false,
-        arguments: []
+        arguments: [],
+        errors: []
       },
       list: {
         mutates: false,
-        arguments: []
+        arguments: [],
+        errors: [
+          "TRANSNOTE_NOT_READY"
+        ]
       },
       get: {
         mutates: false,
         arguments: [{
           name: "noteId",
           kind: "positional",
-          required: true
-        }]
+          required: true,
+          nonEmpty: true
+        }],
+        errors: [
+          "TRANSNOTE_NOT_READY",
+          "NOTE_NOT_FOUND"
+        ]
       },
       search: {
         mutates: false,
         arguments: [{
           name: "query",
           kind: "positional",
-          required: true
-        }]
+          required: true,
+          nonEmpty: true
+        }],
+        errors: [
+          "TRANSNOTE_NOT_READY",
+          "INVALID_ARGUMENT"
+        ]
       },
       create: {
         mutates: true,
@@ -183,21 +198,48 @@ function capabilities() {
           kind: "option",
           flag: "--body",
           required: false
-        }]
+        }],
+        constraints: [{
+          kind: "atLeastOneNonEmpty",
+          arguments: ["title", "body"]
+        }],
+        errors: [
+          "TRANSNOTE_NOT_READY",
+          "EMPTY_NOTE"
+        ]
       },
       comment: {
         mutates: true,
         arguments: [{
           name: "noteId",
           kind: "positional",
-          required: true
+          required: true,
+          nonEmpty: true
         }, {
           name: "text",
           kind: "option",
           flag: "--text",
-          required: true
-        }]
+          required: true,
+          nonEmpty: true
+        }],
+        errors: [
+          "TRANSNOTE_NOT_READY",
+          "NOTE_NOT_FOUND",
+          "EMPTY_COMMENT"
+        ]
       }
+    },
+    errorExitCodes: {
+      MISSING_ARGUMENT: 2,
+      INVALID_ARGUMENT: 2,
+      UNKNOWN_OPTION: 2,
+      UNKNOWN_COMMAND: 2,
+      EMPTY_NOTE: 2,
+      EMPTY_COMMENT: 2,
+      TRANSNOTE_NOT_READY: 3,
+      TRANSNOTE_UNAVAILABLE: 3,
+      NOTE_NOT_FOUND: 4,
+      PROTOCOL_ERROR: 5
     },
     unsupported: [
       "delete",

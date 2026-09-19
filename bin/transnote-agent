@@ -27,6 +27,7 @@ def error(code, message, exit_code):
                 "code": code,
                 "message": message,
             },
+            "protocolVersion": PROTOCOL_VERSION,
         },
         exit_code,
     )

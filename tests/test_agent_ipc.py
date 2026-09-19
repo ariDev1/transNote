@@ -60,7 +60,9 @@ class AgentIpcContractTests(unittest.TestCase):
 
         for method in (
             "status",
+            "capabilities",
             "list",
+            "get",
             "search",
             "create",
             "comment",
