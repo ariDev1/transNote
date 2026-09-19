@@ -2679,6 +2679,13 @@ Panel {
     })
   }
 
+  function agentCapabilitiesJson() {
+    return agentResponse({
+      ok: true,
+      capabilities: Agent.capabilities()
+    })
+  }
+
   function agentStatusJson() {
     return agentResponse({
       ok: true,
@@ -2698,6 +2705,10 @@ Panel {
 
     function status(): string {
       return root.agentStatusJson()
+    }
+
+    function capabilities(): string {
+      return root.agentCapabilitiesJson()
     }
 
     function list(): string {

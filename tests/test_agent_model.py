@@ -170,5 +170,112 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
         self.assertEqual(out, [])
 
 
+    def test_capabilities_manifest_is_fixed_and_restricted(self):
+        out = node_eval(
+            "const A=require('./Agent.js');"
+            "console.log(JSON.stringify(A.capabilities()));"
+        )
+
+        self.assertEqual(
+            list(out.keys()),
+            ["commands", "unsupported"],
+        )
+
+        self.assertEqual(
+            list(out["commands"].keys()),
+            [
+                "status",
+                "capabilities",
+                "list",
+                "search",
+                "create",
+                "comment",
+            ],
+        )
+
+        self.assertEqual(
+            out["commands"]["status"],
+            {"mutates": False, "arguments": []},
+        )
+        self.assertEqual(
+            out["commands"]["capabilities"],
+            {"mutates": False, "arguments": []},
+        )
+        self.assertEqual(
+            out["commands"]["list"],
+            {"mutates": False, "arguments": []},
+        )
+
+        self.assertEqual(
+            out["commands"]["search"],
+            {
+                "mutates": False,
+                "arguments": [
+                    {
+                        "name": "query",
+                        "kind": "positional",
+                        "required": True,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(
+            out["commands"]["create"],
+            {
+                "mutates": True,
+                "arguments": [
+                    {
+                        "name": "title",
+                        "kind": "option",
+                        "flag": "--title",
+                        "required": False,
+                    },
+                    {
+                        "name": "body",
+                        "kind": "option",
+                        "flag": "--body",
+                        "required": False,
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(
+            out["commands"]["comment"],
+            {
+                "mutates": True,
+                "arguments": [
+                    {
+                        "name": "noteId",
+                        "kind": "positional",
+                        "required": True,
+                    },
+                    {
+                        "name": "text",
+                        "kind": "option",
+                        "flag": "--text",
+                        "required": True,
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(
+            out["unsupported"],
+            [
+                "delete",
+                "share",
+                "unshare",
+                "hide",
+                "pairing",
+                "syncAdministration",
+                "attachmentMutation",
+                "filesystemAccess",
+                "commandForwarding",
+                "identityOverride",
+            ],
+        )
+
 if __name__ == "__main__":
     unittest.main()

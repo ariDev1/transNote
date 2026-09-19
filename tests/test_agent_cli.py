@@ -316,5 +316,23 @@ raise SystemExit(exit_code)
         self.assertEqual(out["error"]["code"], "PROTOCOL_ERROR")
 
 
+    def test_capabilities_uses_fixed_ipc_target(self):
+        result = self.invoke("capabilities")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            self.forwarded_argv(),
+            [IPC_TARGET, "capabilities"],
+        )
+
+    def test_capabilities_rejects_arguments_before_ipc(self):
+        result = self.invoke("capabilities", "extra")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "INVALID_ARGUMENT")
+
 if __name__ == "__main__":
     unittest.main()

@@ -178,6 +178,7 @@ class AgentIpcContractTests(unittest.TestCase):
 
         expected = (
             "function status(): string",
+            "function capabilities(): string",
             "function list(): string",
             "function search(query: string): string",
             "function create(title: string, body: string): string",
@@ -188,6 +189,15 @@ class AgentIpcContractTests(unittest.TestCase):
             with self.subTest(signature=signature):
                 self.assertIn(signature, section)
 
+
+    def test_agent_capabilities_are_static_interface_metadata(self):
+        body = self.function_block("agentCapabilitiesJson")
+
+        self.assertIn("Agent.capabilities()", body)
+        self.assertNotIn("agentReady()", body)
+        self.assertNotIn("localNotes", body)
+        self.assertNotIn("peerNotes", body)
+        self.assertNotIn("displayNotes", body)
 
 if __name__ == "__main__":
     unittest.main()

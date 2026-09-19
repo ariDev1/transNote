@@ -251,6 +251,15 @@ def main():
             )
         call_ipc("status")
 
+    if command == "capabilities":
+        if rest:
+            error(
+                "INVALID_ARGUMENT",
+                "capabilities takes no arguments",
+                EXIT_USAGE,
+            )
+        call_ipc("capabilities")
+
     if command == "list":
         if rest:
             error(

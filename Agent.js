@@ -140,9 +140,77 @@ function searchNotes(notes, query) {
 }
 
 
+function capabilities() {
+  return {
+    commands: {
+      status: {
+        mutates: false,
+        arguments: []
+      },
+      capabilities: {
+        mutates: false,
+        arguments: []
+      },
+      list: {
+        mutates: false,
+        arguments: []
+      },
+      search: {
+        mutates: false,
+        arguments: [{
+          name: "query",
+          kind: "positional",
+          required: true
+        }]
+      },
+      create: {
+        mutates: true,
+        arguments: [{
+          name: "title",
+          kind: "option",
+          flag: "--title",
+          required: false
+        }, {
+          name: "body",
+          kind: "option",
+          flag: "--body",
+          required: false
+        }]
+      },
+      comment: {
+        mutates: true,
+        arguments: [{
+          name: "noteId",
+          kind: "positional",
+          required: true
+        }, {
+          name: "text",
+          kind: "option",
+          flag: "--text",
+          required: true
+        }]
+      }
+    },
+    unsupported: [
+      "delete",
+      "share",
+      "unshare",
+      "hide",
+      "pairing",
+      "syncAdministration",
+      "attachmentMutation",
+      "filesystemAccess",
+      "commandForwarding",
+      "identityOverride"
+    ]
+  }
+}
+
+
 if (typeof module !== "undefined") {
   module.exports = {
     PROTOCOL_VERSION: PROTOCOL_VERSION,
+    capabilities: capabilities,
     sanitizeProvenance: sanitizeProvenance,
     markProvenance: markProvenance,
     hasProvenance: hasProvenance,
