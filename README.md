@@ -359,6 +359,8 @@ Exit codes are:
 
 Notes created through the CLI are private by default. The CLI does not share them.
 
+Agent provenance is shown with a subtle `AI` marker for agent-created notes and comments. This provenance is local-only metadata and is not synchronized through LAN or Internet note payloads.
+
 The CLI uses the existing local TransNote identity. It does not accept an author override.
 
 The first Agent CLI intentionally does not expose:

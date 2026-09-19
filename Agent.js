@@ -7,11 +7,80 @@
 
 var PROTOCOL_VERSION = 1
 var PUBLIC_SOURCES = ["local", "lan", "nostr"]
+var MAX_PROVENANCE_IDS = 2000
+var SAFE_PROVENANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 
 function text(value) {
   if (value === undefined || value === null) return ""
   return String(value)
+}
+
+
+function provenanceIds(value) {
+  var out = []
+  var seen = {}
+  var input = Array.isArray(value) ? value : []
+
+  for (var i = 0; i < input.length; i++) {
+    var id = text(input[i]).trim()
+    if (!SAFE_PROVENANCE_ID_RE.test(id) || seen[id]) continue
+
+    seen[id] = true
+    out.push(id)
+
+    if (out.length >= MAX_PROVENANCE_IDS) break
+  }
+
+  return out
+}
+
+
+function sanitizeProvenance(raw) {
+  var source = raw && typeof raw === "object" ? raw : {}
+
+  return {
+    notes: provenanceIds(source.notes),
+    comments: provenanceIds(source.comments)
+  }
+}
+
+
+function markProvenance(raw, kind, id) {
+  var clean = sanitizeProvenance(raw)
+  var candidate = provenanceIds([id])
+
+  if (candidate.length === 0) return clean
+
+  var key = kind === "note"
+    ? "notes"
+    : (kind === "comment" ? "comments" : "")
+
+  if (key === "") return clean
+
+  if (clean[key].indexOf(candidate[0]) === -1) {
+    clean[key].unshift(candidate[0])
+
+    if (clean[key].length > MAX_PROVENANCE_IDS) {
+      clean[key] = clean[key].slice(0, MAX_PROVENANCE_IDS)
+    }
+  }
+
+  return clean
+}
+
+
+function hasProvenance(raw, kind, id) {
+  var clean = sanitizeProvenance(raw)
+  var candidate = provenanceIds([id])
+
+  if (candidate.length === 0) return false
+
+  var list = kind === "note"
+    ? clean.notes
+    : (kind === "comment" ? clean.comments : [])
+
+  return list.indexOf(candidate[0]) !== -1
 }
 
 
@@ -74,6 +143,9 @@ function searchNotes(notes, query) {
 if (typeof module !== "undefined") {
   module.exports = {
     PROTOCOL_VERSION: PROTOCOL_VERSION,
+    sanitizeProvenance: sanitizeProvenance,
+    markProvenance: markProvenance,
+    hasProvenance: hasProvenance,
     serializeComment: serializeComment,
     serializeNote: serializeNote,
     searchNotes: searchNotes

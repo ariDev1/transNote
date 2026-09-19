@@ -1223,6 +1223,9 @@ Panel {
   property string newTitle: ""
   property string newBody: ""
   property var commentDrafts: ({})
+  // Local-only provenance for content created through the restricted agent
+  // interface. This metadata never enters note/comment records or sync payloads.
+  property var agentProvenance: ({ notes: [], comments: [] })
   property var peerFiles: []
   // True once the local notes file has been read (or confirmed missing).
   // Guards persist-on-config-change so a settings update arriving before
@@ -1268,6 +1271,14 @@ Panel {
     }
     var foreign = (foreignComments && foreignComments[noteId]) || []
     return own.concat(foreign)
+  }
+
+  function isAgentNote(noteId) {
+    return Agent.hasProvenance(agentProvenance, "note", noteId)
+  }
+
+  function isAgentComment(commentId) {
+    return Agent.hasProvenance(agentProvenance, "comment", commentId)
   }
 
   // ------------------------------------------------- privacy lockdown
@@ -1334,7 +1345,7 @@ Panel {
     // A failed load keeps memory intact (see onLoadFailed): never write the
     // local file in that state, or a transient read error would wipe it.
     // Snapshot + publish queue still go out so peers keep current state.
-    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, hidden: Store.sanitizeHidden(hiddenIds) }, null, 2) + "\n"
+    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, hidden: Store.sanitizeHidden(hiddenIds), agentProvenance: Agent.sanitizeProvenance(agentProvenance) }, null, 2) + "\n"
     if (!localLoadFailed) {
       // Rotate the previous state aside first (skipped on the very first save
       // when nothing was loaded yet) — never overwrites the backup with empty.
@@ -1358,6 +1369,7 @@ Panel {
     var box = []
     var tomb = ({})
     var hid = []
+    var provenance = Agent.sanitizeProvenance(null)
     try {
       var parsed = JSON.parse(String(raw || ""))
       var arr = parsed && Array.isArray(parsed.notes) ? parsed.notes : (Array.isArray(parsed) ? parsed : [])
@@ -1368,6 +1380,7 @@ Panel {
       box = Store.sanitizeOutbox(parsed && parsed.outbox)
       tomb = Store.sanitizeDeleted(parsed && (parsed.deletedIds || parsed.deleted))
       hid = Store.sanitizeHidden(parsed && parsed.hidden)
+      provenance = Agent.sanitizeProvenance(parsed && parsed.agentProvenance)
       // Device rename migration: every note in this file was authored on
       // this machine, whatever author string it carries. Re-sign stragglers
       // to the current name so Share/Delete keep working and peers qualify
@@ -1392,6 +1405,7 @@ Panel {
     outbox = box.filter(function (entry) { return entry && !Store.isDeleted(tomb, entry.noteId) })
     deletedIds = tomb
     hiddenIds = hid
+    agentProvenance = provenance
     // Pending Nostr deletes = all tombstones (reconciled after publish).
     pendingDeletes = Object.keys(tomb)
     localLoaded = true
@@ -1888,6 +1902,7 @@ Panel {
         root.outbox = []
         root.deletedIds = ({})
         root.hiddenIds = []
+        root.agentProvenance = Agent.sanitizeProvenance(null)
         root.lastLocalRaw = ""
       } else {
         root.localLoadFailed = true
@@ -2595,6 +2610,7 @@ Panel {
 
     var note = Store.createNote(title, body, myId)
     localNotes = [note].concat(localNotes)
+    agentProvenance = Agent.markProvenance(agentProvenance, "note", note.id)
     persist()
 
     return agentResponse({
@@ -2653,6 +2669,7 @@ Panel {
       return agentError("EMPTY_COMMENT", "comment cannot be empty")
     }
 
+    agentProvenance = Agent.markProvenance(agentProvenance, "comment", comment.id)
     persist()
 
     return agentResponse({
@@ -3017,6 +3034,16 @@ Panel {
               elide: Text.ElideRight
             }
             Text {
+              visible: root.isAgentNote(note.id)
+              text: "AI"
+              color: Qt.darker(root.foreground, 1.5)
+              opacity: 0.75
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              maximumLineCount: 1
+            }
+            Text {
               visible: !!root.unreadIds[note.id]
               text: "• new"
               color: Color.urgent
@@ -3169,7 +3196,7 @@ Panel {
             delegate: Text {
               required property var modelData
               width: parent.width
-              text: "↳ " + root.shortAuthor(modelData.author) + ": " + modelData.text
+              text: "↳ " + (root.isAgentComment(modelData.id) ? "AI · " : "") + root.shortAuthor(modelData.author) + ": " + modelData.text
               color: Qt.darker(root.foreground, 1.25)
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
