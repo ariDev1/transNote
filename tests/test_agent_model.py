@@ -191,6 +191,7 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                 "search",
                 "create",
                 "comment",
+                "share",
             ],
         )
 
@@ -312,6 +313,26 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
         )
 
         self.assertEqual(
+            out["commands"]["share"],
+            {
+                "mutates": True,
+                "arguments": [
+                    {
+                        "name": "noteId",
+                        "kind": "positional",
+                        "required": True,
+                        "nonEmpty": True,
+                    }
+                ],
+                "errors": [
+                    "TRANSNOTE_NOT_READY",
+                    "NOTE_NOT_FOUND",
+                    "SHARE_NOT_ALLOWED",
+                ],
+            },
+        )
+
+        self.assertEqual(
             out["errorExitCodes"],
             {
                 "MISSING_ARGUMENT": 2,
@@ -323,6 +344,7 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                 "TRANSNOTE_NOT_READY": 3,
                 "TRANSNOTE_UNAVAILABLE": 3,
                 "NOTE_NOT_FOUND": 4,
+                "SHARE_NOT_ALLOWED": 4,
                 "PROTOCOL_ERROR": 5,
             },
         )
@@ -331,7 +353,6 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
             out["unsupported"],
             [
                 "delete",
-                "share",
                 "unshare",
                 "hide",
                 "pairing",

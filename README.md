@@ -353,6 +353,12 @@ transnote-agent comment NOTE_ID \
   --text "Confirmed"
 ```
 
+Share one note that was created through the Agent API:
+
+```bash
+transnote-agent share NOTE_ID
+```
+
 Agent responses use one JSON object per invocation.
 
 The current protocol version is `1`. Each valid TransNote response includes:
@@ -370,10 +376,14 @@ Exit codes are:
 - `0` — command completed successfully
 - `2` — invalid command or invalid argument
 - `3` — TransNote runtime is unavailable or not ready
-- `4` — requested TransNote object was not found
+- `4` — requested object was not found or the requested operation is not allowed
 - `5` — protocol or response error
 
-Notes created through the CLI are private by default. The CLI does not share them.
+Notes created through the CLI are private by default. Sharing is a separate, explicit share command.
+
+The Agent API can share only a visible local note that was created through the Agent API. It cannot share a human-created local note, a LAN note, or a Nostr note. The normal human Share control remains unchanged and more powerful.
+
+The core API enforces this technical capability boundary. An agent adapter must call `transnote-agent share` only when the user explicitly asked to share or publish the note.
 
 Agent provenance is shown with a subtle `AI` marker for agent-created notes and comments. This provenance is local-only metadata and is not synchronized through LAN or Internet note payloads.
 
@@ -382,7 +392,7 @@ The CLI uses the existing local TransNote identity. It does not accept an author
 The first Agent CLI intentionally does not expose:
 
 - delete
-- share or unshare
+- unshare
 - hide
 - LAN pairing
 - synchronization administration

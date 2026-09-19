@@ -1765,36 +1765,57 @@ Panel {
     persist()
   }
 
-  function toggleShare(id) {
+  function setLocalShareState(id, shared) {
+    var clean = Store.normalizeText(id)
+    if (clean === "") return false
+    var wantShared = shared === true
+
     for (var i = 0; i < localNotes.length; i++) {
-      if (localNotes[i] && localNotes[i].id === id) {
+      if (localNotes[i] && localNotes[i].id === clean) {
+        // A repeated request for the same state is a no-op. This makes the
+        // explicit Agent Share operation safe to retry.
+        if (localNotes[i].shared === wantShared) return true
+
         // Local notes stay manageable after a device rename: re-sign to the
         // current name when sharing — peers qualify authors, not file names.
         if (Store.normalizeText(localNotes[i].author) !== Store.normalizeText(myId)) {
           localNotes[i].author = Store.normalizeText(myId)
         }
-        Store.setShared(localNotes[i], !(localNotes[i].shared === true), "")
+        Store.setShared(localNotes[i], wantShared, "")
         // Unsharing retracts the synced mirror (local bytes stay) AND
         // tombstones the note so peers drop their copy and Nostr relays
         // serve the kind-5 deletion instead of the old ciphertext.
         if (!(localNotes[i].shared === true)) {
-          queueSafeRemove(syncAttachDir(), id)
+          queueSafeRemove(syncAttachDir(), clean)
           localNotes[i].updatedAt = Store.nowIso()
-          deletedIds = Store.addTombstone(deletedIds, id)
-          if (pendingDeletes.indexOf(id) === -1) pendingDeletes = pendingDeletes.concat([id])
+          deletedIds = Store.addTombstone(deletedIds, clean)
+          if (pendingDeletes.indexOf(clean) === -1) pendingDeletes = pendingDeletes.concat([clean])
         } else {
           // Re-sharing clears the tombstone so the live note wins again.
           localNotes[i].updatedAt = Store.nowIso()
           var kept = {}
-          for (var k in (deletedIds || {})) { if (k !== id) kept[k] = deletedIds[k] }
+          for (var k in (deletedIds || {})) { if (k !== clean) kept[k] = deletedIds[k] }
           deletedIds = kept
-          pendingDeletes = (pendingDeletes || []).filter(function (pid) { return pid !== id })
+          pendingDeletes = (pendingDeletes || []).filter(function (pid) { return pid !== clean })
         }
         touchLocalNotes()
-        break
+        persist()
+        return true
       }
     }
-    persist()
+    return false
+  }
+
+  function toggleShare(id) {
+    var clean = Store.normalizeText(id)
+    if (clean === "") return
+
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === clean) {
+        setLocalShareState(clean, !(localNotes[i].shared === true))
+        return
+      }
+    }
   }
 
   function touchLocalNotes() {
@@ -2704,6 +2725,42 @@ Panel {
     })
   }
 
+  function agentShareJson(noteId) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var visible = agentVisibleNote(noteId)
+    if (!visible) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    if (agentSourceForNote(visible.id) !== "local"
+        || !isLocalNote(visible.id)
+        || !isAgentNote(visible.id)) {
+      return agentError("SHARE_NOT_ALLOWED", "note is not eligible for agent sharing")
+    }
+
+    if (!setLocalShareState(visible.id, true)) {
+      return agentError("SHARE_NOT_ALLOWED", "note is not eligible for agent sharing")
+    }
+
+    var shared = agentVisibleNote(visible.id)
+    var note = Agent.serializeNote(
+      agentNoteView(shared || visible),
+      "local"
+    )
+
+    if (!note) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    return agentResponse({
+      ok: true,
+      note: note
+    })
+  }
+
   function agentCapabilitiesJson() {
     return agentResponse({
       ok: true,
@@ -2754,6 +2811,10 @@ Panel {
 
     function comment(noteId: string, text: string): string {
       return root.agentCommentJson(noteId, text)
+    }
+
+    function share(noteId: string): string {
+      return root.agentShareJson(noteId)
     }
   }
 

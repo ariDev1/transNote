@@ -144,6 +144,14 @@ raise SystemExit(exit_code)
             ],
         )
 
+    def test_share_forwards_exact_note_id(self):
+        result = self.invoke("share", "note-123")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            self.forwarded_argv(),
+            [IPC_TARGET, "share", "note-123"],
+        )
+
     def test_unknown_command_is_structured_error(self):
         result = self.invoke("destroy")
         self.assertEqual(result.returncode, 2)
@@ -156,7 +164,6 @@ raise SystemExit(exit_code)
     def test_forbidden_commands_are_not_forwarded(self):
         for command in (
             "delete",
-            "share",
             "unshare",
             "hide",
             "pair",
@@ -389,6 +396,55 @@ raise SystemExit(exit_code)
 
         self.assertEqual(result.returncode, 4)
 
+
+    def test_share_requires_one_note_id_before_ipc(self):
+        result = self.invoke("share")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "MISSING_ARGUMENT")
+
+    def test_share_rejects_extra_arguments_before_ipc(self):
+        result = self.invoke("share", "note-123", "extra")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "INVALID_ARGUMENT")
+
+    def test_share_rejects_empty_note_id_before_ipc(self):
+        result = self.invoke("share", "   ")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "INVALID_ARGUMENT")
+
+    def test_share_not_allowed_uses_domain_exit_code(self):
+        result = self.invoke(
+            "share",
+            "note-human",
+            response={
+                "ok": False,
+                "protocolVersion": PROTOCOL_VERSION,
+                "error": {
+                    "code": "SHARE_NOT_ALLOWED",
+                    "message": "note is not eligible for agent sharing",
+                },
+            },
+        )
+
+        self.assertEqual(result.returncode, 4)
+
+        out = self.output_json(result)
+        self.assertEqual(out["error"]["code"], "SHARE_NOT_ALLOWED")
 
     def test_local_errors_include_protocol_version(self):
         result = self.invoke("get")

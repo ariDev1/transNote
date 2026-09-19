@@ -131,7 +131,10 @@ def call_ipc(method, *arguments):
     }:
         emit(payload, EXIT_UNAVAILABLE)
 
-    if code == "NOTE_NOT_FOUND":
+    if code in {
+        "NOTE_NOT_FOUND",
+        "SHARE_NOT_ALLOWED",
+    }:
         emit(payload, EXIT_DOMAIN)
 
     emit(payload, EXIT_PROTOCOL)
@@ -316,6 +319,30 @@ def main():
 
     if command == "comment":
         parse_comment(rest)
+
+    if command == "share":
+        if not rest:
+            error(
+                "MISSING_ARGUMENT",
+                "share requires one note id",
+                EXIT_USAGE,
+            )
+
+        if len(rest) != 1:
+            error(
+                "INVALID_ARGUMENT",
+                "share takes one note id",
+                EXIT_USAGE,
+            )
+
+        if not rest[0].strip():
+            error(
+                "INVALID_ARGUMENT",
+                "note id cannot be empty",
+                EXIT_USAGE,
+            )
+
+        call_ipc("share", rest[0])
 
     error(
         "UNKNOWN_COMMAND",

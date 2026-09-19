@@ -66,6 +66,7 @@ class AgentIpcContractTests(unittest.TestCase):
             "search",
             "create",
             "comment",
+            "share",
         ):
             self.assertIn(
                 f"function {method}(",
@@ -74,7 +75,6 @@ class AgentIpcContractTests(unittest.TestCase):
 
         for forbidden in (
             "delete",
-            "share",
             "unshare",
             "hide",
             "pair",
@@ -132,6 +132,23 @@ class AgentIpcContractTests(unittest.TestCase):
         self.assertIn("outbox", body)
         self.assertIn("persist()", body)
 
+    def test_agent_share_requires_visible_local_agent_note(self):
+        body = self.function_block("agentShareJson")
+
+        self.assertIn("agentReady()", body)
+        self.assertIn("agentVisibleNote(noteId)", body)
+        self.assertIn('agentSourceForNote(visible.id) !== "local"', body)
+        self.assertIn("!isLocalNote(visible.id)", body)
+        self.assertIn("!isAgentNote(visible.id)", body)
+        self.assertIn("setLocalShareState(visible.id, true)", body)
+        self.assertIn('agentError("NOTE_NOT_FOUND"', body)
+        self.assertIn('agentError("SHARE_NOT_ALLOWED"', body)
+
+        self.assertNotIn(".author", body)
+        self.assertNotIn("toggleShare(", body)
+        self.assertNotIn("notesPath", body)
+        self.assertNotIn("syncSnapshotPath", body)
+
     def test_agent_status_uses_protocol_version(self):
         status = self.function_block("agentStatusJson")
         response = self.function_block("agentResponse")
@@ -186,6 +203,7 @@ class AgentIpcContractTests(unittest.TestCase):
             "function search(query: string): string",
             "function create(title: string, body: string): string",
             "function comment(noteId: string, text: string): string",
+            "function share(noteId: string): string",
         )
 
         for signature in expected:

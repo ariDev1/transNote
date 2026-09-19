@@ -227,6 +227,20 @@ function capabilities() {
           "NOTE_NOT_FOUND",
           "EMPTY_COMMENT"
         ]
+      },
+      share: {
+        mutates: true,
+        arguments: [{
+          name: "noteId",
+          kind: "positional",
+          required: true,
+          nonEmpty: true
+        }],
+        errors: [
+          "TRANSNOTE_NOT_READY",
+          "NOTE_NOT_FOUND",
+          "SHARE_NOT_ALLOWED"
+        ]
       }
     },
     errorExitCodes: {
@@ -239,11 +253,11 @@ function capabilities() {
       TRANSNOTE_NOT_READY: 3,
       TRANSNOTE_UNAVAILABLE: 3,
       NOTE_NOT_FOUND: 4,
+      SHARE_NOT_ALLOWED: 4,
       PROTOCOL_ERROR: 5
     },
     unsupported: [
       "delete",
-      "share",
       "unshare",
       "hide",
       "pairing",

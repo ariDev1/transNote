@@ -29,6 +29,7 @@ class AgentDocumentationTests(unittest.TestCase):
             "transnote-agent search",
             "transnote-agent create",
             "transnote-agent comment",
+            "transnote-agent share",
         ):
             with self.subTest(command=command):
                 self.assertIn(command, self.text)
@@ -45,7 +46,9 @@ class AgentDocumentationTests(unittest.TestCase):
 
     def test_readme_documents_private_creation(self):
         self.assertIn("private by default", self.lower)
-        self.assertIn("does not share", self.lower)
+        self.assertIn("explicit share command", self.lower)
+        self.assertIn("created through the agent api", self.lower)
+        self.assertIn("human-created", self.lower)
 
     def test_readme_documents_local_identity(self):
         self.assertIn("existing local transnote identity", self.lower)
