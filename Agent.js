@@ -155,6 +155,14 @@ function capabilities() {
         mutates: false,
         arguments: []
       },
+      get: {
+        mutates: false,
+        arguments: [{
+          name: "noteId",
+          kind: "positional",
+          required: true
+        }]
+      },
       search: {
         mutates: false,
         arguments: [{

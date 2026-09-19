@@ -334,5 +334,60 @@ raise SystemExit(exit_code)
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"]["code"], "INVALID_ARGUMENT")
 
+
+    def test_get_forwards_exact_note_id(self):
+        result = self.invoke("get", "note-123")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            self.forwarded_argv(),
+            [IPC_TARGET, "get", "note-123"],
+        )
+
+    def test_get_requires_one_note_id_before_ipc(self):
+        result = self.invoke("get")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "MISSING_ARGUMENT")
+
+    def test_get_rejects_extra_arguments_before_ipc(self):
+        result = self.invoke("get", "note-123", "extra")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "INVALID_ARGUMENT")
+
+    def test_get_rejects_empty_note_id_before_ipc(self):
+        result = self.invoke("get", "   ")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.log.exists())
+
+        out = self.output_json(result)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "INVALID_ARGUMENT")
+
+    def test_get_note_not_found_uses_domain_exit_code(self):
+        result = self.invoke(
+            "get",
+            "note-missing",
+            response={
+                "ok": False,
+                "protocolVersion": PROTOCOL_VERSION,
+                "error": {
+                    "code": "NOTE_NOT_FOUND",
+                    "message": "note was not found",
+                },
+            },
+        )
+
+        self.assertEqual(result.returncode, 4)
+
 if __name__ == "__main__":
     unittest.main()

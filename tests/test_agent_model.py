@@ -187,6 +187,7 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
                 "status",
                 "capabilities",
                 "list",
+                "get",
                 "search",
                 "create",
                 "comment",
@@ -204,6 +205,19 @@ console.log(JSON.stringify(A.searchNotes(notes,'match')));
         self.assertEqual(
             out["commands"]["list"],
             {"mutates": False, "arguments": []},
+        )
+        self.assertEqual(
+            out["commands"]["get"],
+            {
+                "mutates": False,
+                "arguments": [
+                    {
+                        "name": "noteId",
+                        "kind": "positional",
+                        "required": True,
+                    }
+                ],
+            },
         )
 
         self.assertEqual(

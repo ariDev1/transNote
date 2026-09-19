@@ -180,6 +180,7 @@ class AgentIpcContractTests(unittest.TestCase):
             "function status(): string",
             "function capabilities(): string",
             "function list(): string",
+            "function get(noteId: string): string",
             "function search(query: string): string",
             "function create(title: string, body: string): string",
             "function comment(noteId: string, text: string): string",
@@ -198,6 +199,24 @@ class AgentIpcContractTests(unittest.TestCase):
         self.assertNotIn("localNotes", body)
         self.assertNotIn("peerNotes", body)
         self.assertNotIn("displayNotes", body)
+
+
+    def test_agent_get_uses_visible_note_and_public_serializer(self):
+        body = self.function_block("agentGetJson")
+
+        self.assertIn("agentReady()", body)
+        self.assertIn("agentVisibleNote(noteId)", body)
+        self.assertIn("agentNoteView(visible)", body)
+        self.assertIn("agentSourceForNote(visible.id)", body)
+        self.assertIn("Agent.serializeNote", body)
+        self.assertIn('agentError("NOTE_NOT_FOUND"', body)
+
+        self.assertNotIn("localNotes", body)
+        self.assertNotIn("peerNotes", body)
+        self.assertNotIn("nostrPeerNotes", body)
+        self.assertNotIn("persist()", body)
+        self.assertNotIn("Store.createNote", body)
+        self.assertNotIn("Store.addComment", body)
 
 if __name__ == "__main__":
     unittest.main()

@@ -269,6 +269,30 @@ def main():
             )
         call_ipc("list")
 
+    if command == "get":
+        if not rest:
+            error(
+                "MISSING_ARGUMENT",
+                "get requires one note id",
+                EXIT_USAGE,
+            )
+
+        if len(rest) != 1:
+            error(
+                "INVALID_ARGUMENT",
+                "get takes one note id",
+                EXIT_USAGE,
+            )
+
+        if not rest[0].strip():
+            error(
+                "INVALID_ARGUMENT",
+                "note id cannot be empty",
+                EXIT_USAGE,
+            )
+
+        call_ipc("get", rest[0])
+
     if command == "search":
         if len(rest) != 1:
             error(

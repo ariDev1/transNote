@@ -2567,6 +2567,31 @@ Panel {
     })
   }
 
+  function agentGetJson(noteId) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var visible = agentVisibleNote(noteId)
+    if (!visible) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    var note = Agent.serializeNote(
+      agentNoteView(visible),
+      agentSourceForNote(visible.id)
+    )
+
+    if (!note) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    return agentResponse({
+      ok: true,
+      note: note
+    })
+  }
+
   function agentSearchJson(query) {
     if (!agentReady()) {
       return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
@@ -2713,6 +2738,10 @@ Panel {
 
     function list(): string {
       return root.agentListJson()
+    }
+
+    function get(noteId: string): string {
+      return root.agentGetJson(noteId)
     }
 
     function search(query: string): string {
