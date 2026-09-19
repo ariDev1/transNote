@@ -12,7 +12,8 @@ Changes include:
 - local-only AI provenance markers for Agent-created notes and comments;
 - restricted Agent Share for visible local notes that were created through the Agent API;
 - an optional OpenCode adapter with fixed TransNote tools and fail-closed version checks;
-- a portable `tests/run` entry point for the repository test suite.
+- a portable `tests/run` entry point for the repository test suite;
+- local private Setup recovery so Omarchy disable/re-enable does not lose the device name, sync folder, or allow-list;
 
 Agent-created notes remain private by default. Sharing is a separate explicit operation. The Agent API does not expose delete, unshare, pairing administration, attachment mutation, arbitrary filesystem access, or arbitrary command forwarding.
 

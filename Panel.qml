@@ -29,6 +29,38 @@ Panel {
   property string syncDirSetting: String(setting("syncDir", ""))
   property string allowListSetting: String(setting("allowList", ""))
 
+  // Omarchy removes a bar widget's complete shell.json entry when the
+  // widget is disabled. Keep a local private recovery copy of Setup.
+  property var setupBackup: Store.sanitizeSetupBackup(null)
+  property bool setupBackupLoaded: false
+  property bool setupBackupLoadFailed: false
+
+  function hasInlineSetting(name) {
+    return settings
+      && settings[name] !== undefined
+      && settings[name] !== null
+  }
+
+  readonly property bool setupIdentityReady: hasInlineSetting("deviceId") || (setupBackupLoaded && !setupBackupLoadFailed)
+
+  readonly property string effectiveDeviceIdSetting: {
+    if (hasInlineSetting("deviceId")) return Store.normalizeText(deviceIdSetting)
+    if (!setupBackupLoaded || setupBackupLoadFailed) return ""
+    return Store.normalizeText(setupBackup.deviceId)
+  }
+
+  readonly property string effectiveSyncDirSetting: {
+    if (hasInlineSetting("syncDir")) return Store.normalizeText(syncDirSetting)
+    if (!setupBackupLoaded || setupBackupLoadFailed) return ""
+    return Store.normalizeText(setupBackup.syncDir)
+  }
+
+  readonly property string effectiveAllowListSetting: {
+    if (hasInlineSetting("allowList")) return Store.normalizeText(allowListSetting)
+    if (!setupBackupLoaded || setupBackupLoadFailed) return ""
+    return Store.normalizeText(setupBackup.allowList)
+  }
+
   property string detectedHostname: ""
   function isSafeDeviceId(value) {
     var id = Store.normalizeText(value)
@@ -41,8 +73,99 @@ Panel {
       && id.indexOf("\0") === -1
   }
 
+  function writeSetupBackup() {
+    if (!setupBackupLoaded || setupBackupLoadFailed) return
+
+    setupBackup = Store.sanitizeSetupBackup(setupBackup)
+    setupBackupFile.setText(
+      JSON.stringify(setupBackup, null, 2) + "\n"
+    )
+  }
+
+  function reconcileSetupBackup() {
+    if (!setupBackupLoaded || setupBackupLoadFailed) return
+
+    var next = Store.sanitizeSetupBackup(setupBackup)
+
+    if (hasInlineSetting("deviceId")) {
+      next.deviceId = Store.normalizeText(deviceIdSetting)
+    }
+    if (hasInlineSetting("syncDir")) {
+      next.syncDir = Store.normalizeText(syncDirSetting)
+    }
+    if (hasInlineSetting("allowList")) {
+      next.allowList = Store.normalizeText(allowListSetting)
+    }
+
+    if (JSON.stringify(next) === JSON.stringify(setupBackup)) return
+
+    setupBackup = next
+    writeSetupBackup()
+  }
+
+  function updateSetupBackup(key, value) {
+    if (!setupBackupLoaded || setupBackupLoadFailed) return
+    if (!hasInlineSetting(key)) return
+
+    if (
+      key !== "deviceId"
+      && key !== "syncDir"
+      && key !== "allowList"
+    ) return
+
+    var next = Store.sanitizeSetupBackup(setupBackup)
+    var clean = Store.normalizeText(value)
+
+    if (next[key] === clean) return
+
+    next[key] = clean
+    setupBackup = next
+    writeSetupBackup()
+  }
+
+  function loadSetupBackup(raw) {
+    var parsed
+
+    try {
+      parsed = JSON.parse(String(raw || ""))
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("invalid setup backup")
+      }
+    } catch (e) {
+      setupBackupLoadFailed = true
+      setupBackupLoaded = false
+      return
+    }
+
+    setupBackup = Store.sanitizeSetupBackup(parsed)
+    setupBackupLoadFailed = false
+    setupBackupLoaded = true
+
+    reconcileSetupBackup()
+
+    if (localLoaded) migrateAuthors()
+  }
+
+  function onSetupBackupLoadFailed(error) {
+    if (error === FileViewError.FileNotFound) {
+      setupBackup = Store.sanitizeSetupBackup(null)
+      setupBackupLoadFailed = false
+      setupBackupLoaded = true
+
+      reconcileSetupBackup()
+
+      if (localLoaded) migrateAuthors()
+      return
+    }
+
+    // A permission or I/O failure is not the same as "no backup".
+    // Keep recovery unavailable instead of silently using empty state.
+    setupBackupLoadFailed = true
+    setupBackupLoaded = false
+  }
+
   readonly property string myId: {
-    var s = Store.normalizeText(deviceIdSetting)
+    var s = Store.normalizeText(effectiveDeviceIdSetting)
     if (isSafeDeviceId(s)) return s
 
     var detected = Store.normalizeText(detectedHostname)
@@ -50,14 +173,14 @@ Panel {
 
     return "local"
   }
-  readonly property var allowList: Store.parseAllowList(allowListSetting)
+  readonly property var allowList: Store.parseAllowList(effectiveAllowListSetting)
   readonly property string syncDir: {
-    var d = Store.normalizeText(syncDirSetting)
+    var d = Store.normalizeText(effectiveSyncDirSetting)
     if (d === "") return ""
     if (d[0] === "~") return (Quickshell.env("HOME") || "") + d.slice(1)
     return d
   }
-  readonly property bool syncConfigured: syncDir !== ""
+  readonly property bool syncConfigured: setupIdentityReady && syncDir !== ""
   // LAN peer snapshots are untrusted synchronized input. Bound both file
   // count and bytes before snapshot content reaches the QML collector.
   readonly property int maxPeerFiles: 32
@@ -65,6 +188,7 @@ Panel {
   readonly property int maxPeerAggregateBytes: 8388608
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/transnote"
+  readonly property string setupBackupPath: dataDir + "/setup.json"
   readonly property string notesPath: dataDir + "/notes.json"
   // Previous saved state of notes.json, rotated on every save. Recovery:
   // copy it over notes.json (see README troubleshooting). Guards the
@@ -856,8 +980,8 @@ Panel {
   }
   function openSetup() {
     setupDevice = myId
-    setupDir = Store.normalizeText(syncDirSetting) !== "" ? Store.normalizeText(syncDirSetting) : "~/transnote-lan"
-    setupPeers = Store.normalizeText(allowListSetting)
+    setupDir = Store.normalizeText(effectiveSyncDirSetting) !== "" ? Store.normalizeText(effectiveSyncDirSetting) : "~/transnote-lan"
+    setupPeers = Store.normalizeText(effectiveAllowListSetting)
     if (setupDeviceField) setupDeviceField.text = setupDevice
     if (setupDirField) setupDirField.text = setupDir
     if (setupPeersField) setupPeersField.text = setupPeers
@@ -1289,7 +1413,7 @@ Panel {
   // (The sync folder itself must also stay non-shared — see README.)
   function secureFiles() {
     if (!secureProcess.running) {
-      var files = [notesPath, notesBakPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
+      var files = [notesPath, notesBakPath, setupBackupPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
       if (syncSnapshotPath !== "") files.push(syncSnapshotPath)
       secureProcess.command = ["bash", "-c",
         "chmod 700 " + shellQuote(dataDir) + " " + shellQuote(localAttachDir) + " 2>/dev/null; chmod 600 "
@@ -1387,7 +1511,7 @@ Panel {
       // the new name. Without this, renaming orphans notes (buttons hide,
       // peers must allow-list the OLD name).
       var nowId = Store.normalizeText(myId)
-      if (nowId !== "") {
+      if (setupIdentityReady && nowId !== "") {
         var stamp = ""
         notes.forEach(function (n) {
           if (Store.normalizeText(n.author) !== nowId) {
@@ -1418,7 +1542,7 @@ Panel {
   // name live. All local notes are this machine's by construction.
   function migrateAuthors() {
     var nowId = Store.normalizeText(myId)
-    if (nowId === "" || !localLoaded) return
+    if (!setupIdentityReady || nowId === "" || !localLoaded) return
     var changed = false
     var stamp = ""
     ;(localNotes || []).forEach(function (n) {
@@ -1905,6 +2029,19 @@ Panel {
   Process {
     id: secureProcess
     running: false
+  }
+
+  FileView {
+    id: setupBackupFile
+    path: root.setupBackupPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.loadSetupBackup(text())
+    onLoadFailed: function (error) {
+      root.onSetupBackupLoadFailed(error)
+    }
+    onSaved: root.secureFiles()
   }
 
   FileView {
@@ -2473,6 +2610,10 @@ Panel {
     setupStep()
   }
 
+  onDeviceIdSettingChanged: root.updateSetupBackup("deviceId", deviceIdSetting)
+  onSyncDirSettingChanged: root.updateSetupBackup("syncDir", syncDirSetting)
+  onAllowListSettingChanged: root.updateSetupBackup("allowList", allowListSetting)
+
   onAllowListChanged: { root.refilterNostr(); root.updateNetStatus() }
   onMyIdChanged: root.migrateAuthors()
   onDisplayNotesChanged: {
@@ -2521,7 +2662,7 @@ Panel {
   }
 
   function agentReady() {
-    return localLoaded && !localLoadFailed
+    return localLoaded && !localLoadFailed && setupIdentityReady
   }
 
   function agentSourceForNote(noteId) {
