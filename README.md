@@ -23,6 +23,7 @@ Normal use and setup are available from the TransNote panel.
 - Encrypted Internet synchronization
 - File attachments over folder sync
 - SHA-256 verification of received attachments
+- Switchable list and square-grid note views
 - Image thumbnails and text previews
 - Copy note content to the clipboard
 - Fenced code blocks with per-block copy
@@ -32,6 +33,8 @@ Normal use and setup are available from the TransNote panel.
 - Local backup of the previous note state
 
 Notes are private by default. TransNote does not publish a note until you explicitly share it.
+
+Use **List** and **Grid** above the Notes view to switch layouts. Grid shows square previews of your notes; selecting a tile keeps the grid open. **Open** shows the full note, comments, and attachments above the selected row. Choose **Full controls in List** when you need the existing note actions.
 
 ## Requirements
 
@@ -56,7 +59,7 @@ Syncthing is recommended for LAN synchronization, but it is not required. Any to
 
 ## Tested compatibility
 
-The TransNote `0.5.6` release candidate has runtime acceptance evidence for this exact environment:
+The `0.5.6` runtime acceptance baseline that `0.5.7` builds on has runtime acceptance evidence for this exact environment:
 
 - TransNote runtime baseline: `184036235f064281533a631aa70c794e62ea96f4`
 - Omarchy `4.0.4-1`
@@ -90,7 +93,9 @@ aridev1.transnote
 
 ## Quick setup
 
-Open the **Setup** tab in TransNote.
+Open the **Devices** tab in TransNote. For the usual setup, create a device setup code on one computer and join it from the other. Pairing adds the other computer to the LAN device list automatically. Device setup codes are separate from Internet friend codes, which are managed under **People**.
+
+Manual folder-sync configuration is available under **Advanced: configure folder sync manually** in Devices.
 
 ### 1. Name this machine
 
@@ -165,9 +170,9 @@ desktop.json
 
 Peer snapshots are checked automatically.
 
-You can also use **Check for peers now** in the Setup panel.
+You can also use **Check for peers now** in the Devices panel.
 
-The Setup panel shows synchronization diagnostics when troubleshooting is necessary.
+The Devices panel shows synchronization diagnostics when troubleshooting is necessary.
 
 ### Important privacy note
 
@@ -190,7 +195,7 @@ To connect with another TransNote user:
 1. Copy your public code from the TransNote panel.
 2. Send it to your friend through a trusted communication channel.
 3. Ask them for their code.
-4. Add their code under **Add a friend**.
+4. Add their code under **People**.
 
 Your private key stays on your machine.
 
@@ -291,6 +296,7 @@ TransNote supports keyboard-first operation.
 | `x` | Delete deletable note (hide someone else's) |
 | `a` | Open attachment controls |
 | `t` | Change note tint |
+| `o` | Open or close details for the selected Grid note |
 | `/` | Focus note composer |
 | `Ctrl+Enter` | Add note |
 | `Esc` | Close or leave the current action |

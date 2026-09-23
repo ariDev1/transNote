@@ -1,5 +1,19 @@
 # Release notes
 
+## TransNote 0.5.7
+
+This version refreshes the TransNote panel UI while retaining the existing local, LAN, Internet, and Agent behavior.
+
+Changes include:
+
+- clearer **People** and **Devices** sections for Internet friends versus LAN/folder sync;
+- device setup-code labels that distinguish computer pairing from Internet friend codes;
+- manual folder-sync controls moved under a collapsed Advanced section;
+- switchable List and square-grid note views;
+- single-note grid selection, with full details shown immediately above the selected row and an explicit route to List controls.
+
+The repository test suite passes on this version. The full runtime compatibility statement remains scoped to the recorded `0.5.6` acceptance baseline below.
+
 ## TransNote 0.5.6
 
 This release candidate combines the current Omarchy TransNote user interface, trust-boundary hardening, and the optional local Agent interface.

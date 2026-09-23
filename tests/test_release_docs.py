@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -7,6 +8,7 @@ README = ROOT / "README.md"
 SECURITY = ROOT / "SECURITY.md"
 THIRD_PARTY = ROOT / "THIRD_PARTY_NOTICES.md"
 RELEASE_NOTES = ROOT / "RELEASE_NOTES.md"
+MANIFEST = ROOT / "manifest.json"
 PREVIEW_CAPTURE = ROOT / "docs" / "preview-capture.md"
 
 
@@ -79,8 +81,10 @@ class ReleaseDocumentationTests(unittest.TestCase):
     def test_release_notes_exist_for_manifest_version(self):
         self.assertTrue(RELEASE_NOTES.is_file())
         text = RELEASE_NOTES.read_text(encoding="utf-8")
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        version = manifest["version"]
 
-        self.assertIn("0.5.6", text)
+        self.assertIn(f"## TransNote {version}", text)
         self.assertIn("Agent CLI", text)
         self.assertIn("OpenCode", text)
 
