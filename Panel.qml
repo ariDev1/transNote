@@ -662,6 +662,7 @@ Panel {
   property string setupPeers: ""
   property string setupMessage: ""
   property bool setupSaving: false
+  property bool manualSetupOpen: false
   // TN1 device-pairing state. Pairing is optional: the existing manual
   // folder-sync settings below remain authoritative and usable without it.
   property string pairingCode: ""
@@ -1147,7 +1148,14 @@ Panel {
     cursorActive = true
     if (dy !== 0) {
       ensureCursor()
-      noteCursor = Math.max(0, Math.min(displayNotes.length - 1, noteCursor + dy))
+      var step = notesLayoutMode === "grid" ? notesGridColumns : 1
+      noteCursor = Math.max(0, Math.min(displayNotes.length - 1, noteCursor + dy * step))
+      if (notesLayoutMode === "grid") gridSelectedNoteId = cursorNoteId()
+      scrollCursorIntoView()
+    } else if (notesLayoutMode === "grid" && dx !== 0) {
+      ensureCursor()
+      noteCursor = Math.max(0, Math.min(displayNotes.length - 1, noteCursor + dx))
+      gridSelectedNoteId = cursorNoteId()
       scrollCursorIntoView()
     } else if (dx < 0) {
       var n = cursorNote()
@@ -1162,7 +1170,14 @@ Panel {
     cursorActive = true
     ensureCursor()
     var n = cursorNote()
-    if (n) toggleExpanded(n.id)
+    if (n) {
+      if (notesLayoutMode === "grid") {
+        gridSelectedNoteId = n.id
+        gridDetailOpen = true
+        Qt.callLater(function () { root.scrollCursorIntoView() })
+      }
+      else toggleExpanded(n.id)
+    }
   }
   function deleteCursorNote() {
     var n = cursorNote()
@@ -1187,6 +1202,9 @@ Panel {
     } else if (t === "t") {
       var c2 = cursorNote()
       if (c2 && isLocalNote(c2.id)) cycleColor(c2.id)
+    } else if (t === "o" && notesLayoutMode === "grid" && gridSelectedNote) {
+      gridDetailOpen = !gridDetailOpen
+      Qt.callLater(function () { root.scrollCursorIntoView() })
     } else if (t === "/") {
       if (!composeOpen) composeOpen = true
       Qt.callLater(function () { if (noteTitleField) noteTitleField.forceActiveFocus() })
@@ -1195,8 +1213,13 @@ Panel {
   function scrollCursorIntoView() {
     if (noteCursor < 0 || !panelFlick) return
     try {
-      notesView.positionViewAtIndex(noteCursor, ListView.Contain)
-      var item = notesView.itemAtIndex(noteCursor)
+      var item = null
+      if (notesLayoutMode === "grid") {
+        item = notesGridRowsRepeater.itemAt(Math.floor(noteCursor / notesGridColumns))
+      } else {
+        notesView.positionViewAtIndex(noteCursor, ListView.Contain)
+        item = notesView.itemAtIndex(noteCursor)
+      }
       if (!item) return
       var p = item.mapToItem(panelFlick.contentItem, 0, 0)
       if (p.y < panelFlick.contentY) panelFlick.contentY = p.y
@@ -1218,6 +1241,37 @@ Panel {
     for (var k in expandedNotes) next[k] = expandedNotes[k]
     next[noteId] = !isExpanded(noteId)
     expandedNotes = next
+  }
+  readonly property var gridSelectedNote: {
+    for (var i = 0; i < displayNotes.length; i++) {
+      if (displayNotes[i] && displayNotes[i].id === gridSelectedNoteId) return displayNotes[i]
+    }
+    return null
+  }
+  function toggleGridDetails() {
+    gridDetailOpen = !gridDetailOpen
+    Qt.callLater(function () { root.scrollCursorIntoView() })
+  }
+  property string notesLayoutMode: "list"
+  property string gridSelectedNoteId: ""
+  property bool gridDetailOpen: false
+  readonly property int notesGridColumns: panelFlick && panelFlick.width < Style.space(420) ? 2 : 3
+  readonly property int notesGridGap: Style.space(6)
+  readonly property real notesGridTileSize: panelFlick
+    ? Math.max(1, (panelFlick.width - (notesGridColumns - 1) * notesGridGap) / notesGridColumns)
+    : Style.space(140)
+  readonly property int gridSelectedNoteIndex: {
+    for (var i = 0; i < displayNotes.length; i++) {
+      if (displayNotes[i] && displayNotes[i].id === gridSelectedNoteId) return i
+    }
+    return -1
+  }
+  readonly property var notesGridRows: {
+    var rows = []
+    for (var i = 0; i < displayNotes.length; i += notesGridColumns) {
+      rows.push({ rowIndex: Math.floor(i / notesGridColumns), notes: displayNotes.slice(i, i + notesGridColumns) })
+    }
+    return rows
   }
   property string newTitle: ""
   property string newBody: ""
@@ -1714,6 +1768,7 @@ Panel {
       foreignComments = fc
     }
     if (selectedNoteId === clean) selectedNoteId = ""
+    if (gridSelectedNoteId === clean) gridSelectedNoteId = ""
     if (unreadIds && unreadIds[clean]) {
       var unread = {}
       for (var u in unreadIds) { if (u !== clean) unread[u] = unreadIds[u] }
@@ -2567,7 +2622,7 @@ Panel {
         }
         Button {
           Layout.fillWidth: true
-          text: "Share"
+          text: "People"
           foreground: root.foreground
           fontFamily: root.fontFamily
           bordered: true
@@ -2576,7 +2631,7 @@ Panel {
         }
         Button {
           Layout.fillWidth: true
-          text: "Setup"
+          text: "Devices"
           foreground: root.foreground
           fontFamily: root.fontFamily
           bordered: true
@@ -2592,11 +2647,48 @@ Panel {
         visible: root.panelView === "notes"
         height: visible ? implicitHeight : 0
 
-      PanelSectionHeader {
-        text: "TRANSNOTE — " + displayNotes.length + " NOTE" + (displayNotes.length === 1 ? "" : "S")
-        foreground: root.foreground
-        fontFamily: root.fontFamily
+      RowLayout {
         width: parent.width
+        spacing: Style.space(4)
+        PanelSectionHeader {
+          Layout.fillWidth: true
+          text: "TRANSNOTE — " + displayNotes.length + " NOTE" + (displayNotes.length === 1 ? "" : "S")
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+        Button {
+          text: "List"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          selected: root.notesLayoutMode === "list"
+          tooltipText: "Show notes as a list"
+          onClicked: root.notesLayoutMode = "list"
+        }
+        Button {
+          text: "Grid"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          selected: root.notesLayoutMode === "grid"
+          tooltipText: "Show notes as square previews"
+          onClicked: root.notesLayoutMode = "grid"
+        }
+        Button {
+          visible: root.notesLayoutMode === "grid" && root.gridSelectedNote !== null
+          text: root.gridDetailOpen ? "Close" : "Open"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          tooltipText: root.gridDetailOpen ? "Close selected note details (keyboard: o)" : "Show selected note details here (keyboard: o)"
+          onClicked: root.toggleGridDetails()
+        }
+      }
+      Text {
+        width: parent.width
+        visible: root.notesLayoutMode === "grid" && root.displayNotes.length > 0
+        text: "Select a square, then choose Open to show full details above its row."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
       }
 
       Button {
@@ -2701,15 +2793,17 @@ Panel {
         Item {
         width: parent.width
         visible: root.displayNotes.length > 0
-        // Natural height: the outer card Flickable is the single scroll
-        // region, so the list never caps or clips mid-note here. (Width is
-        // fixed, so sizing the height from contentHeight cannot loop.)
-        height: visible ? Math.max(notesView.contentHeight, Style.space(120)) : 0
+        // The outer card Flickable remains the single scroll region in both
+        // layouts. Each view reports its natural content height at this width.
+        height: visible
+          ? Math.max(root.notesLayoutMode === "grid" ? notesGrid.implicitHeight : notesView.contentHeight, Style.space(120))
+          : 0
         clip: true
 
         ListView {
           id: notesView
           anchors.fill: parent
+          visible: root.notesLayoutMode === "list"
           model: root.displayNotes
           clip: true
           spacing: Style.space(6)
@@ -3135,6 +3229,213 @@ Panel {
             } // noteCard Column
           } // delegate Item
         } // notesView ListView
+
+        Column {
+          id: notesGrid
+          width: parent.width
+          height: implicitHeight
+          visible: root.notesLayoutMode === "grid"
+          spacing: root.notesGridGap
+
+          Repeater {
+            id: notesGridRowsRepeater
+            model: root.notesGridRows
+            delegate: Column {
+              id: gridRow
+              required property var modelData
+              width: notesGrid.width
+              height: implicitHeight
+              spacing: root.notesGridGap
+
+              Item {
+                id: gridNoteDetail
+                width: parent.width
+                visible: root.gridDetailOpen
+                  && root.gridSelectedNote !== null
+                  && root.gridSelectedNoteIndex >= 0
+                  && Math.floor(root.gridSelectedNoteIndex / root.notesGridColumns) === modelData.rowIndex
+                height: visible ? gridDetailContent.implicitHeight + Style.space(16) : 0
+
+                Rectangle {
+                  anchors.fill: parent
+                  radius: 8
+                  color: (root.gridSelectedNote && (root.gridSelectedNote.color || "") !== "")
+                    ? root.noteTint(root.gridSelectedNote)
+                    : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
+                  border.color: Qt.darker(root.foreground, 1.8)
+                  border.width: 1
+                }
+
+                Column {
+                  id: gridDetailContent
+                  anchors.fill: parent
+                  anchors.margins: Style.space(8)
+                  spacing: Style.space(6)
+
+                  RowLayout {
+                    width: parent.width
+                    Text {
+                      Layout.fillWidth: true
+                      Layout.minimumWidth: 0
+                      text: root.gridSelectedNote ? (root.gridSelectedNote.title || "(untitled)") : ""
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.title
+                      font.bold: true
+                      wrapMode: Text.WrapAnywhere
+                    }
+                    Text {
+                      text: root.gridSelectedNote ? root.authorLabel(root.gridSelectedNote) : ""
+                      color: Qt.darker(root.foreground, 1.4)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      maximumLineCount: 1
+                      elide: Text.ElideRight
+                    }
+                  }
+                  Text {
+                    width: parent.width
+                    visible: root.gridSelectedNote && root.gridSelectedNote.body !== ""
+                    text: root.gridSelectedNote ? root.gridSelectedNote.body : ""
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    wrapMode: Text.WrapAnywhere
+                  }
+                  Repeater {
+                    model: root.gridSelectedNote ? root.commentsFor(root.gridSelectedNote.id) : []
+                    delegate: Text {
+                      required property var modelData
+                      width: parent.width
+                      text: "↳ " + root.shortAuthor(modelData.author) + ": " + modelData.text
+                      color: Qt.darker(root.foreground, 1.25)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      wrapMode: Text.WrapAnywhere
+                    }
+                  }
+                  Text {
+                    width: parent.width
+                    visible: root.gridSelectedNote && root.cleanAttachments(root.gridSelectedNote).length > 0
+                    text: root.gridSelectedNote
+                      ? "Attachments: " + root.cleanAttachments(root.gridSelectedNote).map(function (a) { return a.name }).join(", ")
+                      : ""
+                    color: Qt.darker(root.foreground, 1.4)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WrapAnywhere
+                  }
+                  RowLayout {
+                    width: parent.width
+                    Button {
+                      text: "Copy note"
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: root.copyNoteFull(root.gridSelectedNote)
+                    }
+                    Button {
+                      text: "Full controls in List"
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: root.notesLayoutMode = "list"
+                    }
+                  }
+                }
+              }
+
+              RowLayout {
+                width: parent.width
+                height: root.notesGridTileSize
+                spacing: root.notesGridGap
+                Repeater {
+                  model: modelData.notes
+                  delegate: Item {
+                    required property var modelData
+                    required property int index
+                    property var note: modelData
+                    property var bodyPreview: Store.previewBody(note.body)
+                    width: root.notesGridTileSize
+                    height: root.notesGridTileSize
+
+            Rectangle {
+              anchors.fill: parent
+              radius: 8
+              color: (note.color || "") !== ""
+                ? root.noteTint(note)
+                : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
+              border.width: root.gridSelectedNoteId === note.id ? 2 : 1
+              border.color: root.gridSelectedNoteId === note.id
+                ? Color.accent
+                : Qt.darker(root.foreground, 1.8)
+            }
+
+            Column {
+              anchors.fill: parent
+              anchors.margins: Style.space(8)
+              spacing: Style.space(4)
+
+              Text {
+                width: parent.width
+                text: (note.shared === true ? "● SHARED" : "○ PRIVATE") + (root.unreadIds[note.id] ? " · NEW" : "")
+                color: note.shared === true ? Color.accent : Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                maximumLineCount: 1
+                elide: Text.ElideRight
+              }
+              Text {
+                width: parent.width
+                text: note.title || "(untitled)"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                wrapMode: Text.WrapAnywhere
+              }
+              Text {
+                width: parent.width
+                height: Math.max(Style.space(28), parent.height - Style.space(74))
+                text: bodyPreview.text || "No text preview"
+                color: Qt.darker(root.foreground, 1.2)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                maximumLineCount: 5
+                elide: Text.ElideRight
+                wrapMode: Text.WrapAnywhere
+                verticalAlignment: Text.AlignTop
+                clip: true
+              }
+              Text {
+                width: parent.width
+                text: root.authorLabel(note)
+                color: Qt.darker(root.foreground, 1.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                maximumLineCount: 1
+                elide: Text.ElideRight
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              acceptedButtons: Qt.LeftButton
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                root.gridSelectedNoteId = note.id
+                root.selectedNoteId = note.id
+                root.noteCursor = gridRow.modelData.rowIndex * root.notesGridColumns + index
+                root.cursorActive = true
+                Qt.callLater(function () { root.scrollCursorIntoView() })
+              }
+                  }
+                  }
+                }
+              }
+            }
+          }
+        } // notesGrid rows
       } // notes list container
       } // notesSection column
 
@@ -3147,10 +3448,18 @@ Panel {
 
       // ---- share over internet: no terminal, everything happens here ----
       PanelSectionHeader {
-        text: "SHARE OVER INTERNET"
+        text: "PEOPLE — INTERNET SHARING"
         foreground: root.foreground
         fontFamily: root.fontFamily
         width: parent.width
+      }
+      Text {
+        width: parent.width
+        text: "People here are Internet friends only. Adding or removing someone affects Internet sharing, not LAN device sync."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
       }
       Text {
         width: parent.width
@@ -3290,15 +3599,23 @@ Panel {
         height: visible ? implicitHeight : 0
 
       PanelSectionHeader {
-        text: "SETUP — SHARE ON YOUR NETWORK"
+        text: "DEVICES — SYNC ON YOUR NETWORK"
         foreground: root.foreground
         fontFamily: root.fontFamily
         width: parent.width
       }
       Text {
         width: parent.width
+        text: "Connect computers for LAN/folder sync here. A device setup code is different from an Internet friend code; pairing adds the computer to your device list automatically."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
         visible: !root.syncConfigured
-        text: "Not sharing yet — three quick steps below, no terminal needed."
+        text: "No folder sync configured yet — create a device setup code or join an existing device sync."
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -3323,7 +3640,7 @@ Panel {
       }
       Button {
         width: parent.width
-        text: root.pairingBusy ? "Working…" : "Start new sync"
+        text: root.pairingBusy ? "Working…" : "Create device setup code"
         enabled: !root.pairingBusy
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -3332,7 +3649,7 @@ Panel {
       }
       Text {
         width: parent.width
-        text: "Your setup code"
+        text: "Share this device setup code with the other computer:"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -3361,7 +3678,7 @@ Panel {
       }
       Text {
         width: parent.width
-        text: "Join existing sync"
+        text: "Join an existing device sync"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -3369,7 +3686,7 @@ Panel {
       TextField {
         id: incomingPairingField
         width: parent.width
-        placeholderText: "Paste TransNote setup code"
+        placeholderText: "Paste a device setup code"
         foreground: root.foreground
         text: root.incomingPairingCode
         onTextChanged: root.incomingPairingCode = text
@@ -3378,7 +3695,7 @@ Panel {
       }
       Button {
         width: parent.width
-        text: "Connect"
+        text: "Join device sync"
         enabled: !root.pairingBusy && Store.normalizeText(root.incomingPairingCode) !== ""
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -3481,14 +3798,20 @@ Panel {
         font.pixelSize: Style.font.caption
         wrapMode: Text.WrapAnywhere
       }
-      Text {
+      Button {
         width: parent.width
-        text: "Advanced / manual setup"
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.subtitle
-        font.bold: true
+        text: root.manualSetupOpen ? "Hide manual folder setup" : "Advanced: configure folder sync manually"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        bordered: true
+        selected: root.manualSetupOpen
+        onClicked: root.manualSetupOpen = !root.manualSetupOpen
       }
+      Column {
+        width: parent.width
+        spacing: Style.space(10)
+        visible: root.manualSetupOpen
+        height: visible ? implicitHeight : 0
 
       Text {
         width: parent.width
@@ -3593,10 +3916,18 @@ Panel {
       }
       Text {
         width: parent.width
-        text: "3 — Who can read your shared notes (comma-separated machine names):"
+        text: "3 — Allowed LAN devices (comma-separated machine names):"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
+        wrapMode: Text.WrapAnywhere
+      }
+      Text {
+        width: parent.width
+        text: "Machine names control folder-sync visibility. Removing one hides its LAN shares. People added under People are separate; older Internet public keys in this shared list also authorize Internet sharing."
+        color: Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
         wrapMode: Text.WrapAnywhere
       }
       RowLayout {
@@ -3663,6 +3994,7 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WrapAnywhere
+      }
       }
       } // setupSection column
 
