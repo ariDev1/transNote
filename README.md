@@ -54,6 +54,24 @@ LAN folder synchronization does not require Node.js or Nostr.
 
 Syncthing is recommended for LAN synchronization, but it is not required. Any tool that reliably synchronizes the selected folder can be used.
 
+## Tested compatibility
+
+The TransNote `0.5.6` release candidate has runtime acceptance evidence for this exact environment:
+
+- TransNote runtime baseline: `184036235f064281533a631aa70c794e62ea96f4`
+- Omarchy `4.0.4-1`
+- Quickshell `0.3.1`
+- `x86_64`
+- Linux kernel `7.2.5-3-omarchy`
+- Wayland
+- Hyprland
+- single display at `1920x1080`, scale `1.25`, `60 Hz`
+- AMD Lucienne graphics
+
+This is a tested compatibility scope. It is not a claim that other configurations are incompatible.
+
+The `0.5.6` acceptance scope did not include X11, multi-monitor configurations, other architectures, or other display scaling values.
+
 ## Installation
 
 Install and enable TransNote directly from GitHub:
@@ -279,6 +297,197 @@ TransNote supports keyboard-first operation.
 
 When a text field has focus, normal typing is passed to that field.
 
+
+## Optional Agent CLI
+
+TransNote includes an optional local command-line interface for AI agents and other local automation.
+
+The normal Omarchy plugin installation stays passive. The Agent CLI is not added to your PATH automatically.
+
+Install it explicitly:
+
+```bash
+./tools/install-agent-cli.sh
+```
+
+This creates:
+
+```text
+~/.local/bin/transnote-agent
+```
+
+Remove only the CLI link with:
+
+```bash
+./tools/uninstall-agent-cli.sh
+```
+
+The installer and uninstaller use only the current user account. They do not change shell configuration or TransNote data.
+
+### Commands
+
+Check the running TransNote instance:
+
+```bash
+transnote-agent status
+```
+
+Inspect the machine-readable v1 command contract:
+
+```bash
+transnote-agent capabilities
+```
+
+List visible notes:
+
+```bash
+transnote-agent list
+```
+
+Read one visible note by ID:
+
+```bash
+transnote-agent get NOTE_ID
+```
+
+Search visible note titles and bodies:
+
+```bash
+transnote-agent search "measurement"
+```
+
+Create a local note:
+
+```bash
+transnote-agent create \
+  --title "Test result" \
+  --body "Measurement complete"
+```
+
+Add a comment to a visible note:
+
+```bash
+transnote-agent comment NOTE_ID \
+  --text "Confirmed"
+```
+
+Share one note that was created through the Agent API:
+
+```bash
+transnote-agent share NOTE_ID
+```
+
+Agent responses use one JSON object per invocation.
+
+The current protocol version is `1`. Each valid TransNote response includes:
+
+```text
+protocolVersion
+```
+
+Every CLI JSON result, including locally generated errors, includes `protocolVersion`.
+
+The `capabilities` response describes non-empty argument requirements, the `create` rule that at least one of `title` or `body` must be non-empty, expected command errors, and the stable CLI error-to-exit-code mapping.
+
+Exit codes are:
+
+- `0` — command completed successfully
+- `2` — invalid command or invalid argument
+- `3` — TransNote runtime is unavailable or not ready
+- `4` — requested object was not found or the requested operation is not allowed
+- `5` — protocol or response error
+
+Notes created through the CLI are private by default. Sharing is a separate, explicit share command.
+
+The Agent API can share only a visible local note that was created through the Agent API. It cannot share a human-created local note, a LAN note, or a Nostr note. The normal human Share control remains unchanged and more powerful.
+
+The core API enforces this technical capability boundary. An agent adapter must call `transnote-agent share` only when the user explicitly asked to share or publish the note.
+
+Agent provenance is shown with a subtle `AI` marker for agent-created notes and comments. This provenance is local-only metadata and is not synchronized through LAN or Internet note payloads.
+
+The CLI uses the existing local TransNote identity. It does not accept an author override.
+
+The first Agent CLI intentionally does not expose:
+
+- delete
+- unshare
+- hide
+- LAN pairing
+- synchronization administration
+- attachment mutation
+- arbitrary filesystem access
+- arbitrary command forwarding
+
+The Agent CLI is a restricted TransNote capability. It is not a sandbox.
+
+An AI agent that already has full shell access can bypass this CLI and access other user-level resources directly. Give an agent the `transnote-agent` capability when you want a restricted TransNote interface. Do not treat the CLI as isolation from an unrestricted local shell.
+
+
+### OpenCode adapter
+
+TransNote includes an optional restricted OpenCode adapter under:
+
+```text
+tools/opencode/
+```
+
+The adapter exposes only these dedicated custom tools:
+
+```text
+transnote_status
+transnote_list
+transnote_search
+transnote_create
+transnote_comment
+transnote_share
+```
+
+The OpenCode profile denies all other capabilities by default. It allows only the six named TransNote tools and the user-question tool. General shell access, filesystem tools, Git, web access, and subagents remain denied.
+
+The custom tools call the fixed `~/.local/bin/transnote-agent` executable with an argument array. They do not use a shell. The adapter preflight checks this same fixed executable path.
+
+`transnote_create` creates a private note. `transnote_share` accepts only one note ID. The adapter must use `transnote_share` only when the user explicitly asks to share or publish the note. The TransNote core still verifies that the target is a visible local Agent-created note.
+
+Install the OpenCode adapter explicitly:
+
+```bash
+./tools/opencode/install.sh
+```
+
+The adapter supports the OpenCode V1 permission model. An unknown major version fails closed. A new or changed OpenCode version is not trusted until the permission-boundary acceptance test passes.
+
+The non-mutating permission test is stored at:
+
+```text
+tools/opencode/security-test.txt
+```
+
+Run that test with the restricted TransNote agent. After it passes, record the exact tested OpenCode version:
+
+```bash
+./tools/opencode/mark-tested.sh --accept-security-test
+```
+
+Start the restricted agent only through:
+
+```bash
+./tools/opencode/run.sh
+```
+
+A separate state-transition field test for explicit Share intent is stored at:
+
+```text
+tools/opencode/share-test.txt
+```
+
+That test uses two separate user messages. The first message creates a private Agent note. The second message explicitly requests Share. This proves that creation and sharing remain separate state transitions.
+
+Remove the adapter with:
+
+```bash
+./tools/opencode/uninstall.sh
+```
+
 ## Data and privacy
 
 TransNote stores its local data below:
@@ -410,10 +619,14 @@ Then restart or reopen TransNote.
 
 ```text
 Panel.qml
+Agent.js
 Store.js
+bin/transnote-agent
 nostr/sync.mjs
 nostr/sync.bundle.mjs
 tools/build_nostr_bundle.sh
+tools/install-agent-cli.sh
+tools/uninstall-agent-cli.sh
 manifest.json
 package.json
 package-lock.json
@@ -421,6 +634,12 @@ package-lock.json
 
 `Panel.qml`
 : Omarchy / Quickshell user interface and runtime integration.
+
+`Agent.js`
+: Pure serialization and search helpers for the restricted Agent CLI interface.
+
+`bin/transnote-agent`
+: Local JSON command-line client for the restricted TransNote IPC target.
 
 `Store.js`
 : Note, comment, peer, attachment, and validation logic.
@@ -434,6 +653,12 @@ package-lock.json
 `tools/build_nostr_bundle.sh`
 : Development-only script that generates the committed runtime bundle.
 
+`tools/install-agent-cli.sh`
+: Optional user-level Agent CLI installer.
+
+`tools/uninstall-agent-cli.sh`
+: Optional user-level Agent CLI removal script.
+
 `manifest.json`
 : Omarchy plugin manifest.
 
@@ -442,6 +667,20 @@ package-lock.json
 
 `package-lock.json`
 : Locked npm dependency versions and integrity hashes.
+
+## Support and security
+
+For normal bugs, compatibility reports, and support requests, use:
+
+```text
+https://github.com/ariDev1/transNote/issues
+```
+
+For security reports, follow [`SECURITY.md`](SECURITY.md). Do not publish sensitive vulnerability details in a public issue.
+
+Third-party runtime dependency and bundled-license information is in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Preview capture procedure and reference display conditions are in [`docs/preview-capture.md`](docs/preview-capture.md).
 
 ## License
 

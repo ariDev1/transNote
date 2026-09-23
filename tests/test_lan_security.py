@@ -114,12 +114,12 @@ class PanelSourceTests(unittest.TestCase):
         self.assertNotIn('/usr/bin/rm -rf -- "$target"', self.shell_view)
 
     def test_unshare_uses_descriptor_helper_for_synced_attachments(self):
-        start = self.panel.index("  function toggleShare(id) {")
-        end = self.panel.index("\n  function touchLocalNotes()", start)
+        start = self.panel.index("  function setLocalShareState(id, shared) {")
+        end = self.panel.index("\n  function toggleShare(id)", start)
         body = self.panel[start:end]
 
         self.assertIn(
-            "queueSafeRemove(syncAttachDir(), id)",
+            "queueSafeRemove(syncAttachDir(), clean)",
             body,
         )
         self.assertNotIn("rm -rf", body)

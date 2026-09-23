@@ -6,6 +6,7 @@ import Quickshell.Io
 import qs.Ui
 import qs.Commons
 import "Store.js" as Store
+import "Agent.js" as Agent
 
 // TransNote: fast shared text notes.
 // - Many notes, each with comments.
@@ -28,6 +29,38 @@ Panel {
   property string syncDirSetting: String(setting("syncDir", ""))
   property string allowListSetting: String(setting("allowList", ""))
 
+  // Omarchy removes a bar widget's complete shell.json entry when the
+  // widget is disabled. Keep a local private recovery copy of Setup.
+  property var setupBackup: Store.sanitizeSetupBackup(null)
+  property bool setupBackupLoaded: false
+  property bool setupBackupLoadFailed: false
+
+  function hasInlineSetting(name) {
+    return settings
+      && settings[name] !== undefined
+      && settings[name] !== null
+  }
+
+  readonly property bool setupIdentityReady: hasInlineSetting("deviceId") || (setupBackupLoaded && !setupBackupLoadFailed)
+
+  readonly property string effectiveDeviceIdSetting: {
+    if (hasInlineSetting("deviceId")) return Store.normalizeText(deviceIdSetting)
+    if (!setupBackupLoaded || setupBackupLoadFailed) return ""
+    return Store.normalizeText(setupBackup.deviceId)
+  }
+
+  readonly property string effectiveSyncDirSetting: {
+    if (hasInlineSetting("syncDir")) return Store.normalizeText(syncDirSetting)
+    if (!setupBackupLoaded || setupBackupLoadFailed) return ""
+    return Store.normalizeText(setupBackup.syncDir)
+  }
+
+  readonly property string effectiveAllowListSetting: {
+    if (hasInlineSetting("allowList")) return Store.normalizeText(allowListSetting)
+    if (!setupBackupLoaded || setupBackupLoadFailed) return ""
+    return Store.normalizeText(setupBackup.allowList)
+  }
+
   property string detectedHostname: ""
   function isSafeDeviceId(value) {
     var id = Store.normalizeText(value)
@@ -40,8 +73,99 @@ Panel {
       && id.indexOf("\0") === -1
   }
 
+  function writeSetupBackup() {
+    if (!setupBackupLoaded || setupBackupLoadFailed) return
+
+    setupBackup = Store.sanitizeSetupBackup(setupBackup)
+    setupBackupFile.setText(
+      JSON.stringify(setupBackup, null, 2) + "\n"
+    )
+  }
+
+  function reconcileSetupBackup() {
+    if (!setupBackupLoaded || setupBackupLoadFailed) return
+
+    var next = Store.sanitizeSetupBackup(setupBackup)
+
+    if (hasInlineSetting("deviceId")) {
+      next.deviceId = Store.normalizeText(deviceIdSetting)
+    }
+    if (hasInlineSetting("syncDir")) {
+      next.syncDir = Store.normalizeText(syncDirSetting)
+    }
+    if (hasInlineSetting("allowList")) {
+      next.allowList = Store.normalizeText(allowListSetting)
+    }
+
+    if (JSON.stringify(next) === JSON.stringify(setupBackup)) return
+
+    setupBackup = next
+    writeSetupBackup()
+  }
+
+  function updateSetupBackup(key, value) {
+    if (!setupBackupLoaded || setupBackupLoadFailed) return
+    if (!hasInlineSetting(key)) return
+
+    if (
+      key !== "deviceId"
+      && key !== "syncDir"
+      && key !== "allowList"
+    ) return
+
+    var next = Store.sanitizeSetupBackup(setupBackup)
+    var clean = Store.normalizeText(value)
+
+    if (next[key] === clean) return
+
+    next[key] = clean
+    setupBackup = next
+    writeSetupBackup()
+  }
+
+  function loadSetupBackup(raw) {
+    var parsed
+
+    try {
+      parsed = JSON.parse(String(raw || ""))
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("invalid setup backup")
+      }
+    } catch (e) {
+      setupBackupLoadFailed = true
+      setupBackupLoaded = false
+      return
+    }
+
+    setupBackup = Store.sanitizeSetupBackup(parsed)
+    setupBackupLoadFailed = false
+    setupBackupLoaded = true
+
+    reconcileSetupBackup()
+
+    if (localLoaded) migrateAuthors()
+  }
+
+  function onSetupBackupLoadFailed(error) {
+    if (error === FileViewError.FileNotFound) {
+      setupBackup = Store.sanitizeSetupBackup(null)
+      setupBackupLoadFailed = false
+      setupBackupLoaded = true
+
+      reconcileSetupBackup()
+
+      if (localLoaded) migrateAuthors()
+      return
+    }
+
+    // A permission or I/O failure is not the same as "no backup".
+    // Keep recovery unavailable instead of silently using empty state.
+    setupBackupLoadFailed = true
+    setupBackupLoaded = false
+  }
+
   readonly property string myId: {
-    var s = Store.normalizeText(deviceIdSetting)
+    var s = Store.normalizeText(effectiveDeviceIdSetting)
     if (isSafeDeviceId(s)) return s
 
     var detected = Store.normalizeText(detectedHostname)
@@ -49,14 +173,14 @@ Panel {
 
     return "local"
   }
-  readonly property var allowList: Store.parseAllowList(allowListSetting)
+  readonly property var allowList: Store.parseAllowList(effectiveAllowListSetting)
   readonly property string syncDir: {
-    var d = Store.normalizeText(syncDirSetting)
+    var d = Store.normalizeText(effectiveSyncDirSetting)
     if (d === "") return ""
     if (d[0] === "~") return (Quickshell.env("HOME") || "") + d.slice(1)
     return d
   }
-  readonly property bool syncConfigured: syncDir !== ""
+  readonly property bool syncConfigured: setupIdentityReady && syncDir !== ""
   // LAN peer snapshots are untrusted synchronized input. Bound both file
   // count and bytes before snapshot content reaches the QML collector.
   readonly property int maxPeerFiles: 32
@@ -64,6 +188,7 @@ Panel {
   readonly property int maxPeerAggregateBytes: 8388608
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string dataDir: (Quickshell.env("XDG_DATA_HOME") || home + "/.local/share") + "/transnote"
+  readonly property string setupBackupPath: dataDir + "/setup.json"
   readonly property string notesPath: dataDir + "/notes.json"
   // Previous saved state of notes.json, rotated on every save. Recovery:
   // copy it over notes.json (see README troubleshooting). Guards the
@@ -856,8 +981,8 @@ Panel {
   }
   function openSetup() {
     setupDevice = myId
-    setupDir = Store.normalizeText(syncDirSetting) !== "" ? Store.normalizeText(syncDirSetting) : "~/transnote-lan"
-    setupPeers = Store.normalizeText(allowListSetting)
+    setupDir = Store.normalizeText(effectiveSyncDirSetting) !== "" ? Store.normalizeText(effectiveSyncDirSetting) : "~/transnote-lan"
+    setupPeers = Store.normalizeText(effectiveAllowListSetting)
     if (setupDeviceField) setupDeviceField.text = setupDevice
     if (setupDirField) setupDirField.text = setupDir
     if (setupPeersField) setupPeersField.text = setupPeers
@@ -1276,6 +1401,9 @@ Panel {
   property string newTitle: ""
   property string newBody: ""
   property var commentDrafts: ({})
+  // Local-only provenance for content created through the restricted agent
+  // interface. This metadata never enters note/comment records or sync payloads.
+  property var agentProvenance: ({ notes: [], comments: [] })
   property var peerFiles: []
   // True once the local notes file has been read (or confirmed missing).
   // Guards persist-on-config-change so a settings update arriving before
@@ -1323,6 +1451,14 @@ Panel {
     return own.concat(foreign)
   }
 
+  function isAgentNote(noteId) {
+    return Agent.hasProvenance(agentProvenance, "note", noteId)
+  }
+
+  function isAgentComment(commentId) {
+    return Agent.hasProvenance(agentProvenance, "comment", commentId)
+  }
+
   // ------------------------------------------------- privacy lockdown
   // Notes are private: only this user may read them. The data dir and all
   // plugin files (notes, friends, key, sync queue, decrypted downloads, and
@@ -1331,7 +1467,7 @@ Panel {
   // (The sync folder itself must also stay non-shared — see README.)
   function secureFiles() {
     if (!secureProcess.running) {
-      var files = [notesPath, notesBakPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
+      var files = [notesPath, notesBakPath, setupBackupPath, friendsPath, keyFile, nostrPublishPath, nostrFetchPath, clipboardStagingPath]
       if (syncSnapshotPath !== "") files.push(syncSnapshotPath)
       secureProcess.command = ["bash", "-c",
         "chmod 700 " + shellQuote(dataDir) + " " + shellQuote(localAttachDir) + " 2>/dev/null; chmod 600 "
@@ -1387,7 +1523,7 @@ Panel {
     // A failed load keeps memory intact (see onLoadFailed): never write the
     // local file in that state, or a transient read error would wipe it.
     // Snapshot + publish queue still go out so peers keep current state.
-    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, hidden: Store.sanitizeHidden(hiddenIds) }, null, 2) + "\n"
+    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, hidden: Store.sanitizeHidden(hiddenIds), agentProvenance: Agent.sanitizeProvenance(agentProvenance) }, null, 2) + "\n"
     if (!localLoadFailed) {
       // Rotate the previous state aside first (skipped on the very first save
       // when nothing was loaded yet) — never overwrites the backup with empty.
@@ -1411,6 +1547,7 @@ Panel {
     var box = []
     var tomb = ({})
     var hid = []
+    var provenance = Agent.sanitizeProvenance(null)
     try {
       var parsed = JSON.parse(String(raw || ""))
       var arr = parsed && Array.isArray(parsed.notes) ? parsed.notes : (Array.isArray(parsed) ? parsed : [])
@@ -1421,13 +1558,14 @@ Panel {
       box = Store.sanitizeOutbox(parsed && parsed.outbox)
       tomb = Store.sanitizeDeleted(parsed && (parsed.deletedIds || parsed.deleted))
       hid = Store.sanitizeHidden(parsed && parsed.hidden)
+      provenance = Agent.sanitizeProvenance(parsed && parsed.agentProvenance)
       // Device rename migration: every note in this file was authored on
       // this machine, whatever author string it carries. Re-sign stragglers
       // to the current name so Share/Delete keep working and peers qualify
       // the new name. Without this, renaming orphans notes (buttons hide,
       // peers must allow-list the OLD name).
       var nowId = Store.normalizeText(myId)
-      if (nowId !== "") {
+      if (setupIdentityReady && nowId !== "") {
         var stamp = ""
         notes.forEach(function (n) {
           if (Store.normalizeText(n.author) !== nowId) {
@@ -1445,6 +1583,7 @@ Panel {
     outbox = box.filter(function (entry) { return entry && !Store.isDeleted(tomb, entry.noteId) })
     deletedIds = tomb
     hiddenIds = hid
+    agentProvenance = provenance
     // Pending Nostr deletes = all tombstones (reconciled after publish).
     pendingDeletes = Object.keys(tomb)
     localLoaded = true
@@ -1457,7 +1596,7 @@ Panel {
   // name live. All local notes are this machine's by construction.
   function migrateAuthors() {
     var nowId = Store.normalizeText(myId)
-    if (nowId === "" || !localLoaded) return
+    if (!setupIdentityReady || nowId === "" || !localLoaded) return
     var changed = false
     var stamp = ""
     ;(localNotes || []).forEach(function (n) {
@@ -1805,36 +1944,57 @@ Panel {
     persist()
   }
 
-  function toggleShare(id) {
+  function setLocalShareState(id, shared) {
+    var clean = Store.normalizeText(id)
+    if (clean === "") return false
+    var wantShared = shared === true
+
     for (var i = 0; i < localNotes.length; i++) {
-      if (localNotes[i] && localNotes[i].id === id) {
+      if (localNotes[i] && localNotes[i].id === clean) {
+        // A repeated request for the same state is a no-op. This makes the
+        // explicit Agent Share operation safe to retry.
+        if (localNotes[i].shared === wantShared) return true
+
         // Local notes stay manageable after a device rename: re-sign to the
         // current name when sharing — peers qualify authors, not file names.
         if (Store.normalizeText(localNotes[i].author) !== Store.normalizeText(myId)) {
           localNotes[i].author = Store.normalizeText(myId)
         }
-        Store.setShared(localNotes[i], !(localNotes[i].shared === true), "")
+        Store.setShared(localNotes[i], wantShared, "")
         // Unsharing retracts the synced mirror (local bytes stay) AND
         // tombstones the note so peers drop their copy and Nostr relays
         // serve the kind-5 deletion instead of the old ciphertext.
         if (!(localNotes[i].shared === true)) {
-          queueSafeRemove(syncAttachDir(), id)
+          queueSafeRemove(syncAttachDir(), clean)
           localNotes[i].updatedAt = Store.nowIso()
-          deletedIds = Store.addTombstone(deletedIds, id)
-          if (pendingDeletes.indexOf(id) === -1) pendingDeletes = pendingDeletes.concat([id])
+          deletedIds = Store.addTombstone(deletedIds, clean)
+          if (pendingDeletes.indexOf(clean) === -1) pendingDeletes = pendingDeletes.concat([clean])
         } else {
           // Re-sharing clears the tombstone so the live note wins again.
           localNotes[i].updatedAt = Store.nowIso()
           var kept = {}
-          for (var k in (deletedIds || {})) { if (k !== id) kept[k] = deletedIds[k] }
+          for (var k in (deletedIds || {})) { if (k !== clean) kept[k] = deletedIds[k] }
           deletedIds = kept
-          pendingDeletes = (pendingDeletes || []).filter(function (pid) { return pid !== id })
+          pendingDeletes = (pendingDeletes || []).filter(function (pid) { return pid !== clean })
         }
         touchLocalNotes()
-        break
+        persist()
+        return true
       }
     }
-    persist()
+    return false
+  }
+
+  function toggleShare(id) {
+    var clean = Store.normalizeText(id)
+    if (clean === "") return
+
+    for (var i = 0; i < localNotes.length; i++) {
+      if (localNotes[i] && localNotes[i].id === clean) {
+        setLocalShareState(clean, !(localNotes[i].shared === true))
+        return
+      }
+    }
   }
 
   function touchLocalNotes() {
@@ -1927,6 +2087,19 @@ Panel {
   }
 
   FileView {
+    id: setupBackupFile
+    path: root.setupBackupPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.loadSetupBackup(text())
+    onLoadFailed: function (error) {
+      root.onSetupBackupLoadFailed(error)
+    }
+    onSaved: root.secureFiles()
+  }
+
+  FileView {
     id: localFile
     path: root.notesPath
     watchChanges: true
@@ -1942,6 +2115,7 @@ Panel {
         root.outbox = []
         root.deletedIds = ({})
         root.hiddenIds = []
+        root.agentProvenance = Agent.sanitizeProvenance(null)
         root.lastLocalRaw = ""
       } else {
         root.localLoadFailed = true
@@ -2491,6 +2665,10 @@ Panel {
     setupStep()
   }
 
+  onDeviceIdSettingChanged: root.updateSetupBackup("deviceId", deviceIdSetting)
+  onSyncDirSettingChanged: root.updateSetupBackup("syncDir", syncDirSetting)
+  onAllowListSettingChanged: root.updateSetupBackup("allowList", allowListSetting)
+
   onAllowListChanged: { root.refilterNostr(); root.updateNetStatus() }
   onMyIdChanged: root.migrateAuthors()
   onDisplayNotesChanged: {
@@ -2515,6 +2693,325 @@ Panel {
 
   onPeerDebugChanged: {
     if (peerDebug !== "") peerDebugFile.setText(peerDebug + "\n")
+  }
+
+  // --------------------------------------------------------- agent API
+  // Restricted local interface for explicit AI-agent access.
+  // The agent receives only already-qualified, visible TransNote state.
+  // Storage, sync, pairing, sharing, deletion, and attachments are not
+  // exposed through this interface.
+
+  function agentResponse(payload) {
+    payload.protocolVersion = Agent.PROTOCOL_VERSION
+    return JSON.stringify(payload)
+  }
+
+  function agentError(code, message) {
+    return agentResponse({
+      ok: false,
+      error: {
+        code: code,
+        message: message
+      }
+    })
+  }
+
+  function agentReady() {
+    return localLoaded && !localLoadFailed && setupIdentityReady
+  }
+
+  function agentSourceForNote(noteId) {
+    if (isLocalNote(noteId)) return "local"
+
+    for (var i = 0; i < (peerNotes || []).length; i++) {
+      if (peerNotes[i] && peerNotes[i].id === noteId) return "lan"
+    }
+
+    for (var j = 0; j < (nostrPeerNotes || []).length; j++) {
+      if (nostrPeerNotes[j] && nostrPeerNotes[j].id === noteId) return "nostr"
+    }
+
+    return ""
+  }
+
+  function agentVisibleNote(noteId) {
+    var clean = Store.normalizeText(noteId)
+    if (clean === "") return null
+
+    for (var i = 0; i < (displayNotes || []).length; i++) {
+      if (displayNotes[i] && displayNotes[i].id === clean) return displayNotes[i]
+    }
+
+    return null
+  }
+
+  function agentNoteView(note) {
+    if (!note) return null
+
+    return {
+      id: note.id,
+      title: note.title,
+      body: note.body,
+      author: note.author,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      shared: note.shared === true,
+      comments: commentsFor(note.id)
+    }
+  }
+
+  function agentListJson() {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var notes = []
+
+    ;(displayNotes || []).forEach(function (note) {
+      if (!note) return
+
+      var clean = Agent.serializeNote(
+        agentNoteView(note),
+        agentSourceForNote(note.id)
+      )
+
+      if (clean) notes.push(clean)
+    })
+
+    return agentResponse({
+      ok: true,
+      notes: notes
+    })
+  }
+
+  function agentGetJson(noteId) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var visible = agentVisibleNote(noteId)
+    if (!visible) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    var note = Agent.serializeNote(
+      agentNoteView(visible),
+      agentSourceForNote(visible.id)
+    )
+
+    if (!note) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    return agentResponse({
+      ok: true,
+      note: note
+    })
+  }
+
+  function agentSearchJson(query) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    query = Store.normalizeText(query)
+    if (query === "") {
+      return agentError("INVALID_ARGUMENT", "search query cannot be empty")
+    }
+
+    var matches = Agent.searchNotes(displayNotes, query)
+    var notes = []
+
+    matches.forEach(function (note) {
+      var clean = Agent.serializeNote(
+        agentNoteView(note),
+        agentSourceForNote(note.id)
+      )
+
+      if (clean) notes.push(clean)
+    })
+
+    return agentResponse({
+      ok: true,
+      query: query,
+      notes: notes
+    })
+  }
+
+  function agentCreateJson(title, body) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    title = Store.normalizeText(title)
+    body = Store.normalizeText(body)
+
+    if (title === "" && body === "") {
+      return agentError("EMPTY_NOTE", "title and body cannot both be empty")
+    }
+
+    var note = Store.createNote(title, body, myId)
+    localNotes = [note].concat(localNotes)
+    agentProvenance = Agent.markProvenance(agentProvenance, "note", note.id)
+    persist()
+
+    return agentResponse({
+      ok: true,
+      note: Agent.serializeNote(
+        agentNoteView(note),
+        "local"
+      )
+    })
+  }
+
+  function agentCommentJson(noteId, text) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var visible = agentVisibleNote(noteId)
+    if (!visible) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    text = Store.normalizeText(text)
+    if (text === "") {
+      return agentError("EMPTY_COMMENT", "comment cannot be empty")
+    }
+
+    var comment = null
+
+    if (isLocalNote(visible.id)) {
+      var ownNote = null
+
+      for (var i = 0; i < localNotes.length; i++) {
+        if (localNotes[i] && localNotes[i].id === visible.id) {
+          ownNote = localNotes[i]
+          break
+        }
+      }
+
+      if (!ownNote) {
+        return agentError("NOTE_NOT_FOUND", "note was not found")
+      }
+
+      comment = Store.addComment(ownNote, myId, text)
+      touchLocalNotes()
+    } else {
+      comment = Store.createComment(myId, text)
+      if (comment) {
+        outbox = outbox.concat([{
+          noteId: visible.id,
+          comment: comment
+        }])
+      }
+    }
+
+    if (!comment) {
+      return agentError("EMPTY_COMMENT", "comment cannot be empty")
+    }
+
+    agentProvenance = Agent.markProvenance(agentProvenance, "comment", comment.id)
+    persist()
+
+    return agentResponse({
+      ok: true,
+      noteId: visible.id,
+      comment: Agent.serializeComment(comment)
+    })
+  }
+
+  function agentShareJson(noteId) {
+    if (!agentReady()) {
+      return agentError("TRANSNOTE_NOT_READY", "TransNote state is not ready")
+    }
+
+    var visible = agentVisibleNote(noteId)
+    if (!visible) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    if (agentSourceForNote(visible.id) !== "local"
+        || !isLocalNote(visible.id)
+        || !isAgentNote(visible.id)) {
+      return agentError("SHARE_NOT_ALLOWED", "note is not eligible for agent sharing")
+    }
+
+    if (!setLocalShareState(visible.id, true)) {
+      return agentError("SHARE_NOT_ALLOWED", "note is not eligible for agent sharing")
+    }
+
+    var shared = agentVisibleNote(visible.id)
+    var note = Agent.serializeNote(
+      agentNoteView(shared || visible),
+      "local"
+    )
+
+    if (!note) {
+      return agentError("NOTE_NOT_FOUND", "note was not found")
+    }
+
+    return agentResponse({
+      ok: true,
+      note: note
+    })
+  }
+
+  function agentCapabilitiesJson() {
+    return agentResponse({
+      ok: true,
+      capabilities: Agent.capabilities()
+    })
+  }
+
+  function agentStatusJson() {
+    return agentResponse({
+      ok: true,
+      status: {
+        ready: agentReady(),
+        identity: myId,
+        syncConfigured: syncConfigured,
+        localNoteCount: (localNotes || []).length,
+        remoteNoteCount: (peerNotes || []).length + (nostrPeerNotes || []).length,
+        visibleNoteCount: displayNotes.length
+      }
+    })
+  }
+
+  IpcHandler {
+    target: "aridev1.transnote.agent"
+
+    function status(): string {
+      return root.agentStatusJson()
+    }
+
+    function capabilities(): string {
+      return root.agentCapabilitiesJson()
+    }
+
+    function list(): string {
+      return root.agentListJson()
+    }
+
+    function get(noteId: string): string {
+      return root.agentGetJson(noteId)
+    }
+
+    function search(query: string): string {
+      return root.agentSearchJson(query)
+    }
+
+    function create(title: string, body: string): string {
+      return root.agentCreateJson(title, body)
+    }
+
+    function comment(noteId: string, text: string): string {
+      return root.agentCommentJson(noteId, text)
+    }
+
+    function share(noteId: string): string {
+      return root.agentShareJson(noteId)
+    }
   }
 
   // ---------------------------------------------------------------- IPC
@@ -2873,6 +3370,16 @@ Panel {
               elide: Text.ElideRight
             }
             Text {
+              visible: root.isAgentNote(note.id)
+              text: "AI"
+              color: Qt.darker(root.foreground, 1.5)
+              opacity: 0.75
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              maximumLineCount: 1
+            }
+            Text {
               visible: !!root.unreadIds[note.id]
               text: "• new"
               color: Color.urgent
@@ -3025,7 +3532,7 @@ Panel {
             delegate: Text {
               required property var modelData
               width: parent.width
-              text: "↳ " + root.shortAuthor(modelData.author) + ": " + modelData.text
+              text: "↳ " + (root.isAgentComment(modelData.id) ? "AI · " : "") + root.shortAuthor(modelData.author) + ": " + modelData.text
               color: Qt.darker(root.foreground, 1.25)
               font.family: root.fontFamily
               font.pixelSize: Style.font.body

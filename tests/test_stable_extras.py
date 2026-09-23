@@ -86,7 +86,12 @@ class RenameMigrationTests(unittest.TestCase):
 
     def test_share_and_tint_dont_depend_on_author_string(self):
         self.assertIn("visible: root.isLocalNote(note.id)", self.panel)
-        self.assertIn("Store.setShared(localNotes[i], !(localNotes[i].shared === true), \"\")", self.panel)
+        self.assertIn("function setLocalShareState(id, shared)", self.panel)
+        self.assertIn("Store.setShared(localNotes[i], wantShared, \"\")", self.panel)
+        self.assertIn(
+            "setLocalShareState(clean, !(localNotes[i].shared === true))",
+            self.panel,
+        )
 
     def test_stale_snapshot_removed_after_rename(self):
         self.assertIn("property string lastSnapshotId", self.panel)
@@ -106,7 +111,29 @@ class UnshareTombstoneTests(unittest.TestCase):
     def test_unshare_tombstones_and_reshare_clears(self):
         self.assertIn("tombstones the note so peers drop their copy", self.panel)
         self.assertIn("Re-sharing clears the tombstone", self.panel)
-        self.assertIn("pendingDeletes.indexOf(id) === -1", self.panel)
+        self.assertIn("pendingDeletes.indexOf(clean) === -1", self.panel)
+
+    def test_common_share_transition_is_idempotent(self):
+        body = self.function_block("setLocalShareState", "toggleShare")
+
+        self.assertIn(
+            "if (localNotes[i].shared === wantShared) return true",
+            body,
+        )
+        self.assertIn(
+            'Store.setShared(localNotes[i], wantShared, "")',
+            body,
+        )
+        self.assertIn("persist()", body)
+
+    def test_toggle_share_uses_common_share_transition(self):
+        body = self.function_block("toggleShare", "touchLocalNotes")
+
+        self.assertIn(
+            "setLocalShareState(clean, !(localNotes[i].shared === true))",
+            body,
+        )
+        self.assertNotIn("Store.setShared", body)
 
     def test_unshare_tombstone_filters_remote_notes_not_local_display(self):
         body = self.function_block("refreshDisplay", "allPeerNotes")

@@ -40,6 +40,29 @@ function parseAllowList(value) {
   return String(value || "").split(",").map(function (v) { return normalizeText(v) }).filter(function (v) { return v !== "" })
 }
 
+// Private local fallback for the three Omarchy widget settings.
+// This state is never part of note, LAN, or Nostr payloads.
+function sanitizeSetupBackup(raw) {
+  var parsed = {}
+
+  try {
+    if (typeof raw === "string") parsed = JSON.parse(raw || "")
+    else if (raw && typeof raw === "object" && !Array.isArray(raw)) parsed = raw
+  } catch (e) {
+    parsed = {}
+  }
+
+  var allow = parsed && parsed.allowList
+  if (Array.isArray(allow)) allow = parseAllowList(allow).join(", ")
+
+  return {
+    version: 1,
+    deviceId: normalizeText(parsed && parsed.deviceId),
+    syncDir: normalizeText(parsed && parsed.syncDir),
+    allowList: normalizeText(allow)
+  }
+}
+
 // A peer is qualified when its device id is on the owner's allow-list.
 // Allow-list entries may be device ids ("laptop") or Nostr pubkeys
 // (64-char hex). npub values must be converted to hex first — see
@@ -676,6 +699,7 @@ if (typeof module !== "undefined") {
     normalizeText: normalizeText,
     isSafeId: isSafeId,
     parseAllowList: parseAllowList,
+    sanitizeSetupBackup: sanitizeSetupBackup,
     isHexPubkey: isHexPubkey,
     normalizePubkey: normalizePubkey,
     isQualified: isQualified,
