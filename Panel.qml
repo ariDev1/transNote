@@ -3179,6 +3179,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.notesLayoutMode === "grid" && root.displayNotes.length > 0
         text: "Select a square, then choose Open to show full details above its row."
@@ -3279,6 +3280,7 @@ Panel {
       // ---- notes: bounded scroll area so long notes scroll instead of
       // pushing the panel out of rails ----
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.displayNotes.length === 0 && !root.composeOpen
         text: "No notes yet — press New note to write one."
@@ -3336,6 +3338,7 @@ Panel {
             width: parent.width
             spacing: Style.space(8)
             Text {
+              textFormat: Text.PlainText
               id: noteTitleText
               Layout.fillWidth: true
               Layout.minimumWidth: 0
@@ -3361,6 +3364,7 @@ Panel {
               }
             }
             Text {
+              textFormat: Text.PlainText
               Layout.maximumWidth: Style.space(130)
               text: root.authorLabel(note)
               color: Qt.darker(root.foreground, 1.4)
@@ -3370,6 +3374,7 @@ Panel {
               elide: Text.ElideRight
             }
             Text {
+              textFormat: Text.PlainText
               visible: root.isAgentNote(note.id)
               text: "AI"
               color: Qt.darker(root.foreground, 1.5)
@@ -3380,6 +3385,7 @@ Panel {
               maximumLineCount: 1
             }
             Text {
+              textFormat: Text.PlainText
               visible: !!root.unreadIds[note.id]
               text: "• new"
               color: Color.urgent
@@ -3466,6 +3472,7 @@ Panel {
                 width: parent.width
                 spacing: Style.space(4)
                 Text {
+                  textFormat: Text.PlainText
                   visible: modelData.type !== "code"
                   width: parent.width
                   text: modelData.content
@@ -3482,6 +3489,7 @@ Panel {
                     width: parent.width
                     spacing: Style.space(6)
                     Text {
+                      textFormat: Text.PlainText
                       Layout.fillWidth: true
                       Layout.minimumWidth: 0
                       text: modelData.lang !== "" ? modelData.lang : "code"
@@ -3507,6 +3515,7 @@ Panel {
                     ScrollBar.horizontal.policy: ScrollBar.AsNeeded
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     Text {
+                      textFormat: Text.PlainText
                       id: codeText
                       text: modelData.content
                       font.family: "monospace"
@@ -3530,6 +3539,7 @@ Panel {
           Repeater {
             model: root.commentsFor(note.id)
             delegate: Text {
+              textFormat: Text.PlainText
               required property var modelData
               width: parent.width
               text: "↳ " + (root.isAgentComment(modelData.id) ? "AI · " : "") + root.shortAuthor(modelData.author) + ": " + modelData.text
@@ -3574,6 +3584,7 @@ Panel {
                   source: att.kind === "image" ? root.attUrl(attPath) : ""
                 }
                 Text {
+                  textFormat: Text.PlainText
                   visible: att.kind === "text" && root.attPeeks[attKey] !== undefined && root.attPeeks[attKey] !== ""
                   width: parent.width
                   text: root.peekLines(attKey)
@@ -3596,6 +3607,7 @@ Panel {
                   width: parent.width
                   spacing: Style.space(6)
                   Text {
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
                     text: "📎 " + att.name + " (" + root.formatSize(att.size) + ") · " + stateLabel
@@ -3693,6 +3705,7 @@ Panel {
             }
           }
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: (root.attachMsg[note.id] || "") !== ""
             text: root.attachMsg[note.id] || ""
@@ -3782,6 +3795,7 @@ Panel {
                   RowLayout {
                     width: parent.width
                     Text {
+                      textFormat: Text.PlainText
                       Layout.fillWidth: true
                       Layout.minimumWidth: 0
                       text: root.gridSelectedNote ? (root.gridSelectedNote.title || "(untitled)") : ""
@@ -3792,6 +3806,7 @@ Panel {
                       wrapMode: Text.WrapAnywhere
                     }
                     Text {
+                      textFormat: Text.PlainText
                       text: root.gridSelectedNote ? root.authorLabel(root.gridSelectedNote) : ""
                       color: Qt.darker(root.foreground, 1.4)
                       font.family: root.fontFamily
@@ -3801,6 +3816,7 @@ Panel {
                     }
                   }
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     visible: root.gridSelectedNote && root.gridSelectedNote.body !== ""
                     text: root.gridSelectedNote ? root.gridSelectedNote.body : ""
@@ -3812,6 +3828,7 @@ Panel {
                   Repeater {
                     model: root.gridSelectedNote ? root.commentsFor(root.gridSelectedNote.id) : []
                     delegate: Text {
+                      textFormat: Text.PlainText
                       required property var modelData
                       width: parent.width
                       text: "↳ " + root.shortAuthor(modelData.author) + ": " + modelData.text
@@ -3822,6 +3839,7 @@ Panel {
                     }
                   }
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     visible: root.gridSelectedNote && root.cleanAttachments(root.gridSelectedNote).length > 0
                     text: root.gridSelectedNote
@@ -3882,6 +3900,7 @@ Panel {
               spacing: Style.space(4)
 
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: (note.shared === true ? "● SHARED" : "○ PRIVATE") + (root.unreadIds[note.id] ? " · NEW" : "")
                 color: note.shared === true ? Color.accent : Qt.darker(root.foreground, 1.4)
@@ -3891,6 +3910,7 @@ Panel {
                 elide: Text.ElideRight
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: note.title || "(untitled)"
                 color: root.foreground
@@ -3902,6 +3922,7 @@ Panel {
                 wrapMode: Text.WrapAnywhere
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 height: Math.max(Style.space(28), parent.height - Style.space(74))
                 text: bodyPreview.text || "No text preview"
@@ -3915,6 +3936,7 @@ Panel {
                 clip: true
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: root.authorLabel(note)
                 color: Qt.darker(root.foreground, 1.5)
@@ -3961,6 +3983,7 @@ Panel {
         width: parent.width
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "People here are Internet friends only. Adding or removing someone affects Internet sharing, not LAN device sync."
         color: Qt.darker(root.foreground, 1.4)
@@ -3969,6 +3992,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: root.netStatus === "" ? "Internet: starting…" : root.netStatus
         color: Qt.darker(root.foreground, 1.4)
@@ -3977,6 +4001,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.myNpub !== ""
         text: "Your code — send it to friends (message, email, …):"
@@ -4010,6 +4035,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.myNpub !== "" && (root.copyNote !== "" || !root.wlCopyOk)
         text: root.copyNote !== "" ? root.copyNote : "Tip: tap the code and copy it with Ctrl+C"
@@ -4019,6 +4045,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.setupStage === "ready"
         text: "Add a friend — paste the code they sent you:"
@@ -4056,6 +4083,7 @@ Panel {
         onClicked: root.addFriendFromInput()
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.friendError !== ""
         text: root.friendError
@@ -4071,6 +4099,7 @@ Panel {
           width: parent.width
           spacing: Style.space(6)
           Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             Layout.minimumWidth: 0
             text: "🌐 " + modelData.name
@@ -4112,6 +4141,7 @@ Panel {
         width: parent.width
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Connect computers for LAN/folder sync here. A device setup code is different from an Internet friend code; pairing adds the computer to your device list automatically."
         color: Qt.darker(root.foreground, 1.4)
@@ -4120,6 +4150,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: !root.syncConfigured
         text: "No folder sync configured yet — create a device setup code or join an existing device sync."
@@ -4129,6 +4160,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Device sync"
         color: root.foreground
@@ -4137,6 +4169,7 @@ Panel {
         font.bold: true
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "This computer: " + root.pairingDeviceId()
         color: root.foreground
@@ -4155,6 +4188,7 @@ Panel {
         onClicked: root.preparePairing()
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Share this device setup code with the other computer:"
         color: root.foreground
@@ -4184,6 +4218,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Join an existing device sync"
         color: root.foreground
@@ -4210,6 +4245,7 @@ Panel {
         onClicked: root.connectPairing()
       }
       Text {
+        textFormat: Text.PlainText
         visible: root.pairingPendingDevices.length > 0
         width: parent.width
         text: "Pending computer connections"
@@ -4223,6 +4259,7 @@ Panel {
           required property var modelData
           width: parent ? parent.width : 0
           Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             text: Store.normalizeText(modelData.deviceName) !== ""
               ? modelData.deviceName
@@ -4243,6 +4280,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         visible: root.pairingPendingOffers.length > 0
         width: parent.width
         text: "Pending TransNote folders"
@@ -4256,6 +4294,7 @@ Panel {
           required property var modelData
           width: parent ? parent.width : 0
           Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             text: Store.normalizeText(modelData.deviceName) !== ""
               ? modelData.deviceName + " · " + modelData.folderId
@@ -4276,6 +4315,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Connected computers"
         color: root.foreground
@@ -4283,6 +4323,7 @@ Panel {
         font.pixelSize: Style.font.body
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: root.pairingPeers.length === 0
           ? "No computers connected yet."
@@ -4297,6 +4338,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: root.pairingMessage
         color: root.foreground
@@ -4321,6 +4363,7 @@ Panel {
         height: visible ? implicitHeight : 0
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "1 — Name this machine (becomes <name>.json in the folder):"
         color: root.foreground
@@ -4351,6 +4394,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.setupForeignAuthors.length > 0
         text: "Heads up: your existing notes are signed as '" + root.setupForeignAuthors.join(", ") + "'. Renaming re-signs them automatically, but friends must allow the new name. Prefer keeping the name."
@@ -4360,6 +4404,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "2 — Shared folder (same folder, synced between machines with Syncthing/Dropbox):"
         color: root.foreground
@@ -4422,6 +4467,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "3 — Allowed LAN devices (comma-separated machine names):"
         color: root.foreground
@@ -4430,6 +4476,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Machine names control folder-sync visibility. Removing one hides its LAN shares. People added under People are separate; older Internet public keys in this shared list also authorize Internet sharing."
         color: Qt.darker(root.foreground, 1.4)
@@ -4460,6 +4507,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.setupMessage !== ""
         text: root.setupMessage
@@ -4469,6 +4517,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Then: sync this folder to your other machine, repeat these 3 steps there (other name, same folder, same list), and press Share on a note."
         color: Qt.darker(root.foreground, 1.4)
@@ -4477,6 +4526,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: root.peerFiles.length > 0
           ? "Peer files seen here (" + root.peerFiles.length + "): " + root.peerFiles.map(function (p) { return String(p).split("/").pop() }).join(", ")
@@ -4494,6 +4544,7 @@ Panel {
         onClicked: root.rescanPeers()
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         visible: root.peerDebug !== ""
         text: "Diagnostics: " + root.peerDebug
@@ -4509,6 +4560,7 @@ Panel {
 
       // ---- footer: identity / sync / qualification ----
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "You are: " + root.myId + (root.myHex !== "" ? " · 🌐 " + root.shortAuthor(root.myHex) : "") + " · " + root.syncStatus
         color: Qt.darker(root.foreground, 1.4)
@@ -4517,6 +4569,7 @@ Panel {
         wrapMode: Text.WrapAnywhere
       }
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Sharing with: " + (root.nostrAllowList.length > 0 ? root.nostrAllowList.map(function (h) { return root.shortAuthor(h) }).join(", ") : "(nobody yet)") + (root.pluginVersion !== "" ? " · v" + root.pluginVersion : "")
         color: Qt.darker(root.foreground, 1.4)
