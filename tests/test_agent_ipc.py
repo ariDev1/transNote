@@ -63,9 +63,7 @@ class AgentIpcContractTests(unittest.TestCase):
             "capabilities",
             "list",
             "get",
-            "search",
-            "create",
-            "comment",
+            "request",
             "share",
         ):
             self.assertIn(
@@ -200,9 +198,7 @@ class AgentIpcContractTests(unittest.TestCase):
             "function capabilities(): string",
             "function list(): string",
             "function get(noteId: string): string",
-            "function search(query: string): string",
-            "function create(title: string, body: string): string",
-            "function comment(noteId: string, text: string): string",
+            "function request(descriptor: string): string",
             "function share(noteId: string): string",
         )
 

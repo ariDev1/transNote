@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 
 
 IPC_TARGET = "aridev1.transnote.agent"
@@ -34,20 +36,24 @@ def error(code, message, exit_code):
 
 
 def call_ipc(method, *arguments):
-    argv = [
-        "omarchy-shell",
-        IPC_TARGET,
-        method,
-        *arguments,
-    ]
-
+    # Only an opaque descriptor path is visible in omarchy-shell/qs argv.
+    # TemporaryFile is unlinked and mode 0600; keep it open until IPC returns.
     try:
-        result = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        with tempfile.TemporaryFile(mode="w+b") as request:
+            os.fchmod(request.fileno(), 0o600)
+            request.write(json.dumps({
+                "method": method,
+                "arguments": list(arguments),
+            }, ensure_ascii=False).encode("utf-8"))
+            request.flush()
+            request.seek(0)
+            descriptor = f"/proc/{os.getpid()}/fd/{request.fileno()}"
+            result = subprocess.run(
+                ["omarchy-shell", IPC_TARGET, "request", descriptor],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
     except OSError:
         error(
             "TRANSNOTE_UNAVAILABLE",
@@ -235,6 +241,15 @@ def parse_comment(args):
 
 def main():
     args = sys.argv[1:]
+    if args == ["--json-stdin"]:
+        try:
+            args = json.load(sys.stdin)
+        except (ValueError, OSError):
+            error("INVALID_ARGUMENT", "stdin must contain a JSON argument array", EXIT_USAGE)
+        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+            error("INVALID_ARGUMENT", "stdin must contain a JSON string array", EXIT_USAGE)
+    elif args and args[0] in {"create", "comment", "search"}:
+        error("INVALID_ARGUMENT", "use --json-stdin for private text", EXIT_USAGE)
 
     if not args:
         error(

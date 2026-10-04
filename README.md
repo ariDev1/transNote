@@ -359,22 +359,25 @@ transnote-agent get NOTE_ID
 Search visible note titles and bodies:
 
 ```bash
-transnote-agent search "measurement"
+transnote-agent --json-stdin <<'JSON'
+["search", "measurement"]
+JSON
 ```
 
 Create a local note:
 
 ```bash
-transnote-agent create \
-  --title "Test result" \
-  --body "Measurement complete"
+transnote-agent --json-stdin <<'JSON'
+["create", "--title", "Test result", "--body", "Measurement complete"]
+JSON
 ```
 
 Add a comment to a visible note:
 
 ```bash
-transnote-agent comment NOTE_ID \
-  --text "Confirmed"
+transnote-agent --json-stdin <<'JSON'
+["comment", "NOTE_ID", "--text", "Confirmed"]
+JSON
 ```
 
 Share one note that was created through the Agent API:
@@ -382,6 +385,16 @@ Share one note that was created through the Agent API:
 ```bash
 transnote-agent share NOTE_ID
 ```
+
+Search, create, and comment require `--json-stdin`; their JSON string array
+uses the same command and options (`transnote-agent search`,
+`transnote-agent create`, and `transnote-agent comment`) shown above. Feed
+private text through stdin, never shell arguments or environment variables.
+The OpenCode adapter does this automatically. The CLI forwards requests through
+an unlinked, mode `0600` file descriptor, keeping note text out of
+`omarchy-shell` and `qs` process arguments. The descriptor remains open only
+until the IPC call returns. This protects against other local Unix accounts;
+processes running as the same user and root remain outside this boundary.
 
 Agent responses use one JSON object per invocation.
 

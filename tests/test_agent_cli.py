@@ -28,9 +28,18 @@ class AgentCliContractTests(unittest.TestCase):
 import json
 import os
 import sys
+import stat
+
+argv = sys.argv[1:]
+record = {"argv": argv}
+if len(argv) == 3 and argv[1] == "request":
+    path = argv[2]
+    record["request"] = json.loads(open(path, encoding="utf-8").read())
+    record["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+    record["links"] = os.stat(path).st_nlink
 
 with open(os.environ["TRANSNOTE_AGENT_TEST_LOG"], "w", encoding="utf-8") as f:
-    json.dump(sys.argv[1:], f)
+    json.dump(record, f)
 
 exit_code = int(os.environ.get("TRANSNOTE_AGENT_TEST_SHELL_EXIT", "0"))
 response = os.environ.get(
@@ -49,7 +58,7 @@ raise SystemExit(exit_code)
         )
         shell.chmod(0o755)
 
-    def invoke(self, *args, response=None, shell_exit=0):
+    def invoke(self, *args, response=None, shell_exit=0, raw=False):
         self.assertTrue(
             CLI.is_file(),
             "bin/transnote-agent does not exist yet",
@@ -64,7 +73,8 @@ raise SystemExit(exit_code)
             env["TRANSNOTE_AGENT_TEST_RESPONSE"] = json.dumps(response)
 
         return subprocess.run(
-            [str(CLI), *args],
+            [str(CLI), *args] if raw else [str(CLI), "--json-stdin"],
+            input=None if raw else json.dumps(list(args)),
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -78,7 +88,31 @@ raise SystemExit(exit_code)
         return json.loads(lines[0])
 
     def forwarded_argv(self):
-        return json.loads(self.log.read_text(encoding="utf-8"))
+        record = json.loads(self.log.read_text(encoding="utf-8"))
+        if "request" in record:
+            request = record["request"]
+            return [IPC_TARGET, request["method"], *request["arguments"]]
+        return record["argv"]
+
+    def test_private_payload_uses_unlinked_owner_only_descriptor(self):
+        secrets = ["private title ä", "private body\n<img src='secret'>"]
+        result = self.invoke("create", "--title", secrets[0], "--body", secrets[1])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        record = json.loads(self.log.read_text())
+        self.assertEqual(record["argv"][:2], [IPC_TARGET, "request"])
+        self.assertRegex(record["argv"][2], r"^/proc/[0-9]+/fd/[0-9]+$")
+        for secret in secrets:
+            self.assertNotIn(secret, json.dumps(record["argv"]))
+        self.assertEqual(record["request"], {"method": "create", "arguments": secrets})
+        self.assertEqual(record["mode"], 0o600)
+        self.assertEqual(record["links"], 0)
+        self.assertFalse(Path(record["argv"][2]).exists())
+
+    def test_sensitive_legacy_argv_is_rejected(self):
+        for args in (("create", "--title", "private"), ("comment", "id", "--text", "private"), ("search", "private")):
+            result = self.invoke(*args, raw=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse(self.log.exists())
 
     def test_cli_file_exists(self):
         self.assertTrue(CLI.is_file())

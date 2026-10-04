@@ -177,6 +177,8 @@ class OpenCodeAdapterTests(unittest.TestCase):
         self.assertNotIn('["bash"', text)
         self.assertNotIn('["sh"', text)
         self.assertNotIn("shell:", text)
+        self.assertIn('Bun.spawn([cli, "--json-stdin"]', text)
+        self.assertIn("stdin: new Blob([JSON.stringify(argv)])", text)
 
     def test_custom_tool_builds_fixed_argv(self):
         text = CUSTOM_TOOL.read_text(encoding="utf-8")

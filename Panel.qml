@@ -2978,8 +2978,62 @@ Panel {
     })
   }
 
+  Component {
+    id: agentRequestReader
+    FileView {
+      blockLoading: true
+      printErrors: false
+    }
+  }
+
+  function agentRequestJson(descriptor) {
+    // Never accept arbitrary filesystem paths from the descriptor endpoint.
+    if (!/^\/proc\/[1-9][0-9]*\/fd\/[0-9]+$/.test(descriptor)) {
+      return agentError("INVALID_ARGUMENT", "invalid request descriptor")
+    }
+    var reader = agentRequestReader.createObject(root, { path: descriptor })
+    var request
+    try {
+      request = JSON.parse(reader.text())
+    } catch (e) {
+      return agentError("INVALID_ARGUMENT", "invalid request data")
+    } finally {
+      reader.path = ""
+      reader.destroy()
+    }
+    var counts = { status: 0, capabilities: 0, list: 0, get: 1,
+                   search: 1, create: 2, comment: 2, share: 1 }
+    if (!request || typeof request !== "object"
+        || typeof request.method !== "string"
+        || !Object.prototype.hasOwnProperty.call(counts, request.method)
+        || !Array.isArray(request.arguments)
+        || request.arguments.length !== counts[request.method]) {
+      return agentError("INVALID_ARGUMENT", "invalid request operation")
+    }
+    var a = request.arguments
+    for (var i = 0; i < a.length; i++) {
+      if (typeof a[i] !== "string") {
+        return agentError("INVALID_ARGUMENT", "request arguments must be strings")
+      }
+    }
+    switch (request.method) {
+      case "status": return agentStatusJson()
+      case "capabilities": return agentCapabilitiesJson()
+      case "list": return agentListJson()
+      case "get": return agentGetJson(a[0])
+      case "search": return agentSearchJson(a[0])
+      case "create": return agentCreateJson(a[0], a[1])
+      case "comment": return agentCommentJson(a[0], a[1])
+      case "share": return agentShareJson(a[0])
+    }
+  }
+
   IpcHandler {
     target: "aridev1.transnote.agent"
+
+    function request(descriptor: string): string {
+      return root.agentRequestJson(descriptor)
+    }
 
     function status(): string {
       return root.agentStatusJson()
@@ -2995,18 +3049,6 @@ Panel {
 
     function get(noteId: string): string {
       return root.agentGetJson(noteId)
-    }
-
-    function search(query: string): string {
-      return root.agentSearchJson(query)
-    }
-
-    function create(title: string, body: string): string {
-      return root.agentCreateJson(title, body)
-    }
-
-    function comment(noteId: string, text: string): string {
-      return root.agentCommentJson(noteId, text)
     }
 
     function share(noteId: string): string {

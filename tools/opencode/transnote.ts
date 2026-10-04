@@ -8,8 +8,8 @@ async function run(argv: string[]): Promise<string> {
     throw new Error("HOME is not set")
   }
 
-  const proc = Bun.spawn([cli, ...argv], {
-    stdin: "ignore",
+  const proc = Bun.spawn([cli, "--json-stdin"], {
+    stdin: new Blob([JSON.stringify(argv)]),
     stdout: "pipe",
     stderr: "pipe",
   })
