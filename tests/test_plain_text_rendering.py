@@ -51,7 +51,7 @@ class PlainTextRenderingTests(unittest.TestCase):
                 raw = {
                     "notes": [{"id": "note-safe-1", "author": author,
                                "title": text, "body": text}],
-                    "pairs": [{"noteId": "note-safe-1", "comment": {
+                    "pairs": [{"noteId": "note-safe-1", "noteAuthor": author, "comment": {
                         "id": "comment-safe-1", "author": author, "text": text}}],
                 }
                 result = run_store("Store.sanitizeNostrFetch(" + json.dumps(raw)

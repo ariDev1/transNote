@@ -211,6 +211,25 @@ Internet synchronization uses encrypted messages. Relay servers receive cipherte
 
 TransNote will not publish Internet notes when no recipients are configured.
 
+Internet notes are identified by the sender's authenticated public key and
+their note ID together. Another friend using the same note ID has an independent
+note and cannot replace or delete the original. Comments carry both the target
+author and note ID; comment identities also include their authenticated sender.
+Only your own local notes and authenticated Internet copies under your own key
+can be deleted for everyone. Received deletions are never republished under
+your identity. A later intentional share from the same author supersedes older
+deletions; stale copies stay suppressed.
+
+Older Internet comments that omit the target author cannot be routed safely
+and are no longer displayed or retransmitted. Both sides should update before
+sending new comments. Existing local and folder comments are unaffected.
+Update every device that uses the same Nostr key so it applies the same
+ownership and comment-routing rules.
+Internet note IDs exposed through the Agent API now include the author; obtain
+the current ID from `list` or `search`. Old Internet hides may need to be reapplied.
+Folder synchronization still relies on trusted machines and folder permissions;
+its device names do not authenticate Nostr identities.
+
 ## Attachments
 
 Attachments are supported through **folder synchronization**.

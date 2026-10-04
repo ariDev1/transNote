@@ -199,13 +199,13 @@ const alice = 'a'.repeat(64), bob = 'b'.repeat(64);
 const root = {myHex: 'c'.repeat(64), nostrFetchRaw: ''};
 const nostrAllowList = [alice, bob], allowList = [alice, bob], myId = 'local';
 let deletedIds = {}, nostrDeleted = [], pendingDeletes = [], localNotes = [], peerNotes = [];
-let nostrPeerNotes = [], foreignComments = {}, outbox = [], hiddenIds = [], agentProvenance = {};
+let nostrPeerNotes = [], foreignComments = {}, nostrComments = {}, outbox = [], hiddenIds = [], agentProvenance = {};
 let localLoadFailed = false, lastLocalRaw = '', localLoaded = false;
 const setupIdentityReady = false;
 const localFile = {setText: text => {localFile.text = text}};
 const notesBakFile = {setText: () => {}};
 const nostrPublishFile = {setText: text => {nostrPublishFile.text = text}};
-const writeSnapshot = () => {}, refreshDisplay = () => {}, secureFiles = () => {}, mergePeers = () => {};
+const writeSnapshot = () => {}, refreshDisplay = () => {}, secureFiles = () => {}, mergePeers = () => {}, refilterNostr = () => {};
 const allPeerNotes = () => peerNotes.concat(nostrPeerNotes);
 """ + fetch + persist + load + """
 const note = {id: 'victim', title: 'keep', authorHex: alice};

@@ -28,7 +28,41 @@ function isSafeId(value) {
 
 function sanitizeId(value) {
   var s = normalizeText(value)
-  return isSafeId(s) ? s : ""
+  return isSafeId(s) || splitNostrNoteId(s) ? s : ""
+}
+
+// Nostr IDs are application identities, never filesystem components. Raw
+// wire IDs stay within the original grammar; the signed author supplies the
+// namespace. No metadata supplied by a peer can choose another namespace.
+function nostrNoteId(author, wireId) {
+  var hex = normalizePubkey(author)
+  var id = normalizeText(wireId)
+  return hex !== "" && isSafeId(id) ? "nostr:" + hex + ":" + id : ""
+}
+
+function splitNostrNoteId(value) {
+  var match = /^nostr:([0-9a-f]{64}):([A-Za-z0-9][A-Za-z0-9_-]{0,127})$/.exec(normalizeText(value))
+  return match ? { author: match[1], noteId: match[2] } : null
+}
+
+function nostrTimestamp(value) {
+  var stamp = Date.parse(normalizeText(value))
+  return isFinite(stamp) ? new Date(stamp).toISOString() : "1970-01-01T00:00:00.000Z"
+}
+
+function nostrReshareTimestamp(id, myHex, deletedMap, receivedDeleted) {
+  var stamp = Date.now()
+  function after(value) {
+    var deletedAt = Date.parse(normalizeText(value))
+    if (isFinite(deletedAt)) stamp = Math.max(stamp, (Math.floor(deletedAt / 1000) + 1) * 1000)
+  }
+  var local = sanitizeDeleted(deletedMap)
+  after(local[id])
+  after(local[nostrNoteId(myHex, id)])
+  sanitizeNostrDeleted(receivedDeleted).forEach(function (entry) {
+    if (entry.noteId === id && entry.author === normalizePubkey(myHex)) after(entry.deletedAt)
+  })
+  return new Date(stamp).toISOString()
 }
 
 // Parse the allowList setting, which may be an array, a comma-separated
@@ -43,7 +77,7 @@ function parseAllowList(value) {
 // Private local fallback for the three Omarchy widget settings.
 // This state is never part of note, LAN, or Nostr payloads.
 function sanitizeSetupBackup(raw) {
-  var parsed = {}
+  var parsed = Object.create(null)
 
   try {
     if (typeof raw === "string") parsed = JSON.parse(raw || "")
@@ -221,10 +255,12 @@ function sanitizeOutbox(raw) {
 // comment id so repeats across snapshots never duplicate.
 function mergeForeignComments(existingMap, incomingPairs, myAllowList, myId) {
   var me = normalizeText(myId)
-  var merged = {}
+  var merged = Object.create(null)
   var src = existingMap && typeof existingMap === "object" ? existingMap : {}
   Object.keys(src).forEach(function (k) {
-    merged[k] = (Array.isArray(src[k]) ? src[k] : []).map(sanitizeComment).filter(function (c) { return !!c })
+    merged[k] = (Array.isArray(src[k]) ? src[k] : []).map(sanitizeComment).filter(function (c) {
+      return c && (c.author === me || isQualified(c.author, myAllowList))
+    })
   })
   sanitizeOutbox(incomingPairs).forEach(function (entry) {
     var author = normalizeText(entry.comment.author)
@@ -232,7 +268,7 @@ function mergeForeignComments(existingMap, incomingPairs, myAllowList, myId) {
     if (!merged[entry.noteId]) merged[entry.noteId] = []
     var known = false
     for (var i = 0; i < merged[entry.noteId].length; i++) {
-      if (merged[entry.noteId][i].id === entry.comment.id) { known = true; break }
+      if (merged[entry.noteId][i].id === entry.comment.id && merged[entry.noteId][i].author === author) { known = true; break }
     }
     if (!known) merged[entry.noteId].push(entry.comment)
     merged[entry.noteId].sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1 })
@@ -243,7 +279,7 @@ function mergeForeignComments(existingMap, incomingPairs, myAllowList, myId) {
 // Drop outbox entries whose note is gone from both local and peer notes,
 // so deleted peer notes don't accumulate stale comments forever.
 function pruneOutbox(outbox, localNotes, peerNotes) {
-  var alive = {}
+  var alive = Object.create(null)
   ;(Array.isArray(localNotes) ? localNotes : []).forEach(function (n) { if (n) alive[n.id] = true })
   ;(Array.isArray(peerNotes) ? peerNotes : []).forEach(function (n) { if (n) alive[n.id] = true })
   return sanitizeOutbox(outbox).filter(function (entry) { return !!alive[entry.noteId] })
@@ -256,7 +292,7 @@ function pruneOutbox(outbox, localNotes, peerNotes) {
 // (deletedIds) and as NIP-09 kind-5 events on Nostr, and every merge path
 // filters against them. Delete-wins over concurrent edits.
 function sanitizeDeleted(raw) {
-  var out = {}
+  var out = Object.create(null)
   try {
     if (Array.isArray(raw)) {
       raw.forEach(function (entry) {
@@ -281,7 +317,7 @@ function sanitizeDeleted(raw) {
 }
 
 function addTombstone(deletedMap, id) {
-  var out = {}
+  var out = Object.create(null)
   var src = sanitizeDeleted(deletedMap)
   Object.keys(src).forEach(function (k) { out[k] = src[k] })
   var clean = sanitizeId(id)
@@ -290,7 +326,7 @@ function addTombstone(deletedMap, id) {
 }
 
 function mergeDeleted() {
-  var out = {}
+  var out = Object.create(null)
   for (var i = 0; i < arguments.length; i++) {
     var m = sanitizeDeleted(arguments[i])
     Object.keys(m).forEach(function (k) {
@@ -302,7 +338,7 @@ function mergeDeleted() {
 
 function isDeleted(deletedMap, id) {
   if (!deletedMap || typeof deletedMap !== "object") return false
-  return !!deletedMap[normalizeText(id)]
+  return Object.prototype.hasOwnProperty.call(deletedMap, normalizeText(id)) && !!deletedMap[normalizeText(id)]
 }
 
 function filterDeletedNotes(notes, deletedMap) {
@@ -319,7 +355,7 @@ var MAX_HIDDEN = 1000
 
 function sanitizeHidden(raw) {
   var out = []
-  var seen = {}
+  var seen = Object.create(null)
   var arr = Array.isArray(raw) ? raw : []
   for (var i = 0; i < arr.length; i++) {
     var entry = arr[i]
@@ -473,7 +509,7 @@ function mimeForName(name) {
 // Returns a clean record or null.
 function sanitizeAttachment(raw) {
   if (!raw || typeof raw !== "object") return null
-  var id = sanitizeId(raw.id)
+  var id = isSafeId(raw.id) ? normalizeText(raw.id) : ""
   var name = sanitizeFileName(raw.name)
   var size = Math.floor(Number(raw.size))
   var sha = normalizeText(raw.sha256).toLowerCase()
@@ -490,7 +526,7 @@ function createAttachment(name, size, sha256, id) {
   var clean = sanitizeFileName(name)
   var s = Math.floor(Number(size))
   var sha = normalizeText(sha256).toLowerCase()
-  var attId = normalizeText(id) !== "" ? sanitizeId(id) : uid("att")
+  var attId = normalizeText(id) !== "" ? (isSafeId(id) ? normalizeText(id) : "") : uid("att")
   if (attId === "" || clean === "" || !isFinite(s) || s < 0 || s > MAX_ATTACHMENT_BYTES) return null
   if (!/^[0-9a-f]{64}$/.test(sha)) return null
   return { id: attId, name: clean, size: s, sha256: sha, mime: mimeForName(clean), kind: attachmentKindFor(clean) }
@@ -509,7 +545,7 @@ function sanitizeFriends(raw) {
   try {
     var parsed = typeof raw === "string" ? JSON.parse(raw || "") : (raw || {})
     var arr = parsed && Array.isArray(parsed.friends) ? parsed.friends : (Array.isArray(parsed) ? parsed : [])
-    var seen = {}
+    var seen = Object.create(null)
     for (var i = 0; i < arr.length; i++) {
       var e = arr[i]
       if (!e || typeof e !== "object") continue
@@ -526,7 +562,7 @@ function sanitizeFriends(raw) {
 // Everyone allowed on the internet path: hex entries from the allow-list
 // setting plus friends added in the panel UI. De-duplicated hex array.
 function effectiveNostrAllow(allowList, friends) {
-  var seen = {}
+  var seen = Object.create(null)
   var out = []
   hexRecipients(allowList).forEach(function (h) { if (!seen[h]) { seen[h] = true; out.push(h) } })
   sanitizeFriends(friends).forEach(function (f) { if (!seen[f.hex]) { seen[f.hex] = true; out.push(f.hex) } })
@@ -543,106 +579,104 @@ function effectiveNostrAllow(allowList, friends) {
 // Received deletions retain their signed author and stay separate from
 // locally authored tombstones: they must never be re-signed by this device.
 function sanitizeNostrDeleted(raw) {
-  var out = []
-  var seen = {}
+  var byId = Object.create(null)
   ;(Array.isArray(raw) ? raw : []).forEach(function (entry) {
     if (!entry || typeof entry !== "object") return
-    var id = sanitizeId(entry.noteId)
+    var id = normalizeText(entry.noteId)
     var author = normalizePubkey(entry.author)
-    if (id === "" || author === "") return
-    var key = author + ":" + id
-    if (seen[key]) return
-    seen[key] = true
-    out.push({ noteId: id, author: author, deletedAt: normalizeText(entry.deletedAt) || nowIso() })
+    var key = nostrNoteId(author, id)
+    if (key === "") return
+    var deletedAt = nostrTimestamp(entry.deletedAt || nowIso())
+    if (!byId[key] || deletedAt > byId[key].deletedAt)
+      byId[key] = { noteId: id, author: author, deletedAt: deletedAt }
   })
-  return out
+  return Object.keys(byId).map(function (key) { return byId[key] })
 }
 
-function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted, knownNostrDeleted) {
+function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted, knownNostrDeleted, localNotes) {
   var notes = []
   var pairs = []
-  // Previously accepted deletions survive startup before friends/identity
-  // load, allow-list changes, and malformed fetches. Gate new arrivals only.
+  var me = normalizePubkey(myHex)
+  var localIds = Object.create(null)
+  ;(Array.isArray(localNotes) ? localNotes : []).forEach(function (n) {
+    if (n && isSafeId(n.id)) localIds[n.id] = true
+  })
+  // Keep already accepted state even before identity/friends load or if the
+  // latest fetch is malformed. Only new arrivals need current qualification.
   var deleted = sanitizeNostrDeleted(knownNostrDeleted)
   try {
     var parsed = typeof raw === "string" ? JSON.parse(raw || "") : (raw || {})
-    var me = normalizePubkey(myHex)
     var arr = parsed && Array.isArray(parsed.notes) ? parsed.notes : []
     for (var i = 0; i < arr.length; i++) {
       var n = arr[i]
       if (!n || typeof n !== "object") continue
-      var authorHex = normalizePubkey(n.authorHex || n.author)
-      if (authorHex === "") continue
-      if (!(authorHex === me || isQualified(authorHex, allowList))) continue
-      var clean = sanitizeNote({
-        id: n.id,
-        title: n.title,
-        body: n.body,
-        author: authorHex,
-        createdAt: n.updatedAt || n.createdAt,
-        updatedAt: n.updatedAt,
-        shared: true,
-        comments: [],
-        attachments: []
-      })
+      var author = normalizePubkey(n.authorHex || n.author)
+      if (author === "" || !(author === me || isQualified(author, allowList))) continue
+      var id = nostrNoteId(author, n.id)
+      if (id === "") continue
+      var clean = sanitizeNote({ id: id, title: n.title, body: n.body, author: author,
+        createdAt: nostrTimestamp(n.createdAt || n.updatedAt),
+        updatedAt: nostrTimestamp(n.updatedAt || n.createdAt), shared: true })
       if (clean) notes.push(clean)
     }
     var rawPairs = parsed && Array.isArray(parsed.pairs) ? parsed.pairs : []
     for (var j = 0; j < rawPairs.length; j++) {
       var e = rawPairs[j]
-      if (!e || typeof e !== "object") continue
-      var c = e.comment
-      if (!c || typeof c !== "object") continue
-      var ca = normalizePubkey(c.author)
-      if (ca === "") continue
-      if (!(ca === me || isQualified(ca, allowList))) continue
-      var sc = sanitizeComment({ id: c.id, author: ca, text: c.text, createdAt: c.createdAt })
-      var noteId = sanitizeId(e.noteId)
-      if (noteId === "" || !sc) continue
-      pairs.push({ noteId: noteId, comment: sc })
+      if (!e || !e.comment) continue
+      var ca = normalizePubkey(e.comment.author)
+      if (ca === "" || !(ca === me || isQualified(ca, allowList))) continue
+      var target = normalizePubkey(e.noteAuthor)
+      var targetId = nostrNoteId(target, e.noteId)
+      // An ownerless legacy comment cannot be routed without allowing a
+      // second author to hijack its target by reusing the same wire ID.
+      if (targetId === "" || !(target === me || isQualified(target, allowList))) continue
+      var ref = normalizeText(e.comment.id)
+      if (!isSafeId(ref)) continue
+      var sc = sanitizeComment({ id: "nostr-comment:" + ca + ":" + ref,
+        author: ca, text: e.comment.text, createdAt: nostrTimestamp(e.comment.createdAt) })
+      if (sc) pairs.push({ noteId: targetId, comment: sc })
     }
     var rawDeleted = parsed && Array.isArray(parsed.deleted) ? parsed.deleted : []
     for (var d = 0; d < rawDeleted.length; d++) {
       var del = rawDeleted[d]
       if (!del || typeof del !== "object") continue
-      var delId = sanitizeId(del.noteId || del.id || del.d)
-      if (delId === "") continue
-      var delAuthor = normalizePubkey(del.author || del.authorHex)
-      if (delAuthor === "" || !(delAuthor === me || isQualified(delAuthor, allowList))) continue
-      deleted.push({ noteId: delId, author: delAuthor, deletedAt: normalizeText(del.deletedAt) || nowIso() })
+      var da = normalizePubkey(del.author || del.authorHex)
+      var wireId = normalizeText(del.noteId || del.id || del.d)
+      if (nostrNoteId(da, wireId) === "" || !(da === me || isQualified(da, allowList))) continue
+      deleted.push({ noteId: wireId, author: da, deletedAt: del.deletedAt || nowIso() })
     }
   } catch (e) { /* ignore bad fetch file */ }
   deleted = sanitizeNostrDeleted(deleted)
-  // Local tombstones are never populated from remote data. Nostr deletions
-  // only suppress notes owned by the event signer, including hex-self.
   var tomb = sanitizeDeleted(knownDeleted)
-  var remoteTomb = {}
-  deleted.forEach(function (entry) {
-    remoteTomb[entry.author + ":" + entry.noteId] = true
+  var remoteTomb = Object.create(null)
+  deleted.forEach(function (entry) { remoteTomb[nostrNoteId(entry.author, entry.noteId)] = entry.deletedAt })
+  var notesById = Object.create(null)
+  notes.forEach(function (n) {
+    var prev = notesById[n.id]
+    if (!prev || n.updatedAt > prev.updatedAt || (n.updatedAt === prev.updatedAt &&
+        JSON.stringify(n) < JSON.stringify(prev))) notesById[n.id] = n
   })
-  // De-duplicate notes by id (newest wins): relays return the same event
-  // once per relay, and every sync cycle republishes shared notes.
-  var notesById = {}
-  for (var k = 0; k < notes.length; k++) {
-    var prev = notesById[notes[k].id]
-    if (!prev || (notes[k].updatedAt || "") >= (prev.updatedAt || "")) notesById[notes[k].id] = notes[k]
+  function locallyDeleted(id) {
+    var target = splitNostrNoteId(id)
+    return isDeleted(tomb, id) || (target && target.author === me && isDeleted(tomb, target.noteId))
   }
-  notes = Object.keys(notesById).map(function (key) { return notesById[key] })
-  notes = filterDeletedNotes(notes, tomb).filter(function (n) {
-    return !remoteTomb[n.author + ":" + n.id]
-  })
-  // Collapse relay duplicates: before stable `ref` ids existed, every
-  // 60s republish of the same outbox comment created a new event id, so
-  // the same (note, author, text) arrives N times with N different
-  // 64-hex ids. Group by content: keep every distinct stable id (an
-  // intentional repeated text stays visible twice), drop legacy hex
-  // shadows once a stable copy exists, and collapse a hex-only group to
-  // its earliest copy.
-  pairs = dedupNostrPairs(pairs)
-  pairs = pairs.filter(function (p) {
-    if (!p || isDeleted(tomb, p.noteId)) return false
-    var host = notesById[p.noteId]
-    return !host || !remoteTomb[host.author + ":" + host.id]
+  function remotelyDeleted(id) {
+    var stamp = remoteTomb[id]
+    // A strictly newer note from the same signer is an intentional reshare.
+    // Stale copies and missing timestamps never override a deletion.
+    return !!stamp && (!notesById[id] || notesById[id].updatedAt <= stamp)
+  }
+  notes = Object.keys(notesById).filter(function (id) {
+    return !locallyDeleted(id) && !remotelyDeleted(id)
+  }).map(function (id) { return notesById[id] })
+  pairs = dedupNostrPairs(pairs).filter(function (p) {
+    return !locallyDeleted(p.noteId) && !remotelyDeleted(p.noteId)
+  }).map(function (p) {
+    var target = splitNostrNoteId(p.noteId)
+    // Only the target's authenticated pubkey can alias a locally authored
+    // note. LAN names and another signer's same wire ID never authorize it.
+    if (target.author === me && localIds[target.noteId]) p.noteId = target.noteId
+    return p
   })
   return { notes: notes, pairs: pairs, deleted: deleted, tombstones: tomb, nostrTombstones: deleted }
 }
@@ -650,11 +684,12 @@ function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted, knownNostrDelet
 // 64-hex ids are Nostr event ids (legacy relay duplicates); anything
 // else is a stable outbox id (e.g. "c-...").
 function isEventId(value) {
-  return /^[0-9a-fA-F]{64}$/.test(normalizeText(value))
+  var raw = normalizeText(value).replace(/^nostr-comment:[0-9a-f]{64}:/, "")
+  return /^[0-9a-fA-F]{64}$/.test(raw)
 }
 
 function dedupNostrPairs(pairs) {
-  var groups = {}
+  var groups = Object.create(null)
   var order = []
   for (var i = 0; i < pairs.length; i++) {
     var p = pairs[i]
@@ -667,7 +702,7 @@ function dedupNostrPairs(pairs) {
   for (var g = 0; g < order.length; g++) {
     var entries = groups[order[g]]
     var stable = []
-    var seenStable = {}
+    var seenStable = Object.create(null)
     var legacy = []
     for (var j = 0; j < entries.length; j++) {
       var id = entries[j].comment.id
@@ -695,23 +730,31 @@ function dedupNostrPairs(pairs) {
 // sync.mjs encrypts one copy per --recipients pubkey. `pendingDeletes`
 // is an array of noteIds deleted since the last successful publish;
 // when omitted, all tombstones are queued (safe, idempotent).
-function buildNostrPublish(localNotes, outbox, deletedMap, pendingDeletes) {
+function buildNostrPublish(localNotes, outbox, deletedMap, pendingDeletes, myHex) {
   var notes = []
   var comments = []
   ;(Array.isArray(localNotes) ? localNotes : []).forEach(function (n) {
     if (!n || n.shared !== true) return
     var clean = sanitizeNote(n)
-    if (!clean) return
+    if (!clean || !isSafeId(clean.id)) return
     notes.push({ ref: clean.id, d: clean.id, title: clean.title, body: clean.body, updatedAt: clean.updatedAt })
   })
   sanitizeOutbox(outbox).forEach(function (entry) {
-    comments.push({ ref: entry.comment.id, noteD: entry.noteId, text: entry.comment.text })
+    var target = splitNostrNoteId(entry.noteId)
+    if (!target) return // LAN-only or ambiguous legacy target: never send to Nostr.
+    comments.push({ ref: entry.comment.id, noteD: target.noteId, noteAuthor: target.author, text: entry.comment.text })
   })
   var tomb = sanitizeDeleted(deletedMap)
   var queue = Array.isArray(pendingDeletes)
     ? pendingDeletes.map(sanitizeId).filter(function (id) { return id !== "" && !!tomb[id] })
     : Object.keys(tomb)
-  var deletes = queue.map(function (id) { return { ref: "del-" + id, noteId: id, deletedAt: tomb[id] } })
+  var me = normalizePubkey(myHex)
+  var deletes = []
+  queue.forEach(function (id) {
+    var target = splitNostrNoteId(id)
+    if (target && (me === "" || target.author !== me)) return
+    deletes.push({ ref: "del-" + id, noteId: target ? target.noteId : id, deletedAt: tomb[id] })
+  })
   return { notes: notes, comments: comments, deletes: deletes }
 }
 
@@ -728,6 +771,9 @@ if (typeof module !== "undefined") {
     sanitizeSetupBackup: sanitizeSetupBackup,
     isHexPubkey: isHexPubkey,
     normalizePubkey: normalizePubkey,
+    nostrNoteId: nostrNoteId,
+    splitNostrNoteId: splitNostrNoteId,
+    nostrReshareTimestamp: nostrReshareTimestamp,
     isQualified: isQualified,
     createNote: createNote,
     createComment: createComment,

@@ -24,7 +24,7 @@ class DeletionPropagationTests(unittest.TestCase):
 const S = require('./Store.js');
 const alice = 'a'.repeat(64), bob = 'b'.repeat(64), me = 'c'.repeat(64);
 const note = {id: 'victim', title: 'keep', authorHex: alice};
-const pair = {noteId: 'victim', comment: {id: 'comment-1', author: bob, text: 'keep'}};
+const pair = {noteId: 'victim', noteAuthor: alice, comment: {id: 'comment-1', author: bob, text: 'keep'}};
 const results = [bob, me, '', 'invalid'].map(author => {
   const f = S.sanitizeNostrFetch({notes: [note], pairs: [pair], deleted: [{noteId: 'victim', author}]}, [alice, bob], me, {});
   return {notes: f.notes.length, pairs: f.pairs.length,
@@ -62,7 +62,7 @@ const author = 'a'.repeat(64);
 const me = 'b'.repeat(64);
 const raw = JSON.stringify({notes: [{id: 'note-1', title: 't', body: 'b', authorHex: author, updatedAt: '2026-09-14T00:00:00.000Z'}], pairs: [], deleted: []});
 const before = S.sanitizeNostrFetch(raw, [author], me, {});
-const after = S.sanitizeNostrFetch(raw, [author], me, {'note-1': '2026-09-14T01:00:00.000Z'});
+const after = S.sanitizeNostrFetch(raw, [author], me, {['nostr:' + author + ':note-1']: '2026-09-14T01:00:00.000Z'});
 console.log(JSON.stringify({before: before.notes.length, after: after.notes.length}));
 """
         )
@@ -77,7 +77,7 @@ const author = 'a'.repeat(64);
 const me = 'b'.repeat(64);
 const raw = JSON.stringify({
   notes: [{id: 'note-2', title: 't', body: 'b', authorHex: author, updatedAt: '2026-09-14T00:00:00.000Z'}],
-  pairs: [{noteId: 'note-2', comment: {id: 'c-1', author, text: 'hi', createdAt: '2026-09-14T00:00:00.000Z'}}],
+  pairs: [{noteId: 'note-2', noteAuthor: author, comment: {id: 'c-1', author, text: 'hi', createdAt: '2026-09-14T00:00:00.000Z'}}],
   deleted: [{noteId: 'note-2', author}]
 });
 const f = S.sanitizeNostrFetch(raw, [author], me, {});

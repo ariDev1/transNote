@@ -16,7 +16,7 @@
 //     recipient, plus NIP-09 kind-5 deletions for tombstoned notes.
 //     Prints {"results":[{"ref","id","ok"}]}.
 //     publish.json: { notes:[{ref,d,title,body,updatedAt}],
-//                     comments:[{ref,noteD,parentEventId,text}],
+//                     comments:[{ref,noteD,noteAuthor,parentEventId,text}],
 //                     deletes:[{ref,noteId,deletedAt}] }
 //     --recipients: comma-separated hex or npub pubkeys. Your own pubkey is
 //     always added automatically so a second device of yours can fetch.
@@ -37,7 +37,7 @@
 //            content=nip44(JSON {title,body}).
 //   comment: kind 1, tags p=<recipientHex>, i=<note-id>, t=transnote,
 //            enc=nip44-v2, client=transnote (+ e-tag when parent known);
-//            content=nip44(JSON {text, ref}).
+//            a=30078:<noteAuthor>:<note-id>, content=nip44(JSON {text, ref, noteAuthor}).
 //            `ref` is the stable outbox comment id (e.g. "c-..."). Every
 //            sync cycle republishes the whole outbox, so without `ref` each
 //            republish would look like a brand-new comment (new event id)
@@ -52,7 +52,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
-import { finalizeEvent, generateSecretKey, getPublicKey, nip19, nip44, SimplePool } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19, nip44, SimplePool, verifyEvent } from "nostr-tools";
 
 const APP_TAG = "transnote";
 const NOTE_KIND = 30078;
@@ -204,7 +204,7 @@ async function cmdPublish(a) {
   await withPool(relays, async (pool) => {
     for (const n of job.notes || []) {
       const noteId = String(n.d || "");
-      if (!noteId) continue;
+      if (!isWireId(noteId)) continue;
       for (const r of recipients) {
         const ev = finalizeEvent(
           {
@@ -244,17 +244,20 @@ async function cmdPublish(a) {
       }
     }
     for (const c of job.comments || []) {
+      const noteAuthor = hexPubkey(c.noteAuthor);
+      if (!isWireId(c.noteD) || !noteAuthor) continue;
       for (const r of recipients) {
         const tags = [
           ["p", r],
           ["t", APP_TAG],
           ["i", String(c.noteD)],
+          ["a", `${NOTE_KIND}:${noteAuthor}:${c.noteD}`],
           ["enc", "nip44-v2"],
           ["client", "transnote"],
         ];
         if (c.parentEventId) tags.unshift(["e", String(c.parentEventId), "", "root"]);
         const ev = finalizeEvent(
-          { kind: 1, created_at: Math.floor(Date.now() / 1000), tags, content: encryptFor(sk, r, { text: String(c.text || ""), ref: String(c.ref || "") }) },
+          { kind: 1, created_at: Math.floor(Date.now() / 1000), tags, content: encryptFor(sk, r, { text: String(c.text || ""), ref: String(c.ref || ""), noteAuthor }) },
           sk,
         );
         const ok = await publishToRelays(pool, relays, ev);
@@ -267,7 +270,7 @@ async function cmdPublish(a) {
     // note event for relays that honor NIP-09; `k` names the deleted kind.
     for (const del of job.deletes || []) {
       const noteId = String(del.noteId || del.d || "");
-      if (!noteId) continue;
+      if (!isWireId(noteId)) continue;
       const when = Math.floor(new Date(del.deletedAt || Date.now()).getTime() / 1000) || Math.floor(Date.now() / 1000);
       for (const r of recipients) {
         const ev = finalizeEvent(
@@ -297,6 +300,32 @@ async function cmdPublish(a) {
 function tag(ev, name, idx = 0) {
   const t = (ev.tags || []).filter((x) => x[0] === name);
   return t.length > idx ? t[idx][1] || "" : "";
+}
+
+function isWireId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
+}
+
+function hexPubkey(value) {
+  return typeof value === "string" && /^[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : "";
+}
+
+function commentNoteAuthor(ev, noteId, clear) {
+  const declared = clear && hexPubkey(clear.noteAuthor);
+  const addresses = (ev.tags || []).filter(t => Array.isArray(t) && t[0] === "a");
+  const owners = new Set();
+  for (const address of addresses) {
+    const parts = String(address[1] || "").split(":");
+    if (parts.length !== 3 || parts[0] !== String(NOTE_KIND) || parts[2] !== noteId) return "";
+    const owner = hexPubkey(parts[1]);
+    if (!owner) return "";
+    owners.add(owner);
+  }
+  if (owners.size > 1) return "";
+  const addressed = owners.values().next().value || "";
+  if (clear && !declared) return "";
+  if (declared && addressed && declared !== addressed) return "";
+  return declared || addressed;
 }
 
 async function cmdFetch(a) {
@@ -342,9 +371,11 @@ async function cmdFetch(a) {
       events = Array.from(byId.values());
     }
     for (const ev of events) {
-      if (typeof ev.created_at === "number" && ev.created_at > newest) newest = ev.created_at;
+      if (!ev || typeof ev !== "object" || !verifyEvent(ev) || !Number.isSafeInteger(ev.created_at) || ev.created_at < 0
+          || !Number.isFinite(new Date(ev.created_at * 1000).getTime())) continue;
       const author = String(ev.pubkey || "").toLowerCase();
       if (!isAllowedAuthor(author, allowHexSet, myHex)) continue;
+      if (ev.created_at > newest) newest = ev.created_at;
       // NIP-09 deletions: plaintext, no decryption needed. The `i` tag
       // carries the noteId; `a` tags reference addressable note events
       // (30078:<author>:<noteId>:<recipient>). Recorded per note with the
@@ -357,13 +388,15 @@ async function cmdFetch(a) {
           else if (t[0] === "a") {
             const parts = String(t[1] || "").split(":");
             // ["30078", authorHex, noteId, recipientHex]
-            if (parts.length >= 3 && parts[0] === String(NOTE_KIND) && parts[2].trim() !== "") ids.add(parts[2].trim());
+            if (parts.length >= 3 && parts[0] === String(NOTE_KIND)
+                && hexPubkey(parts[1]) === author && isWireId(parts[2])) ids.add(parts[2]);
           } else if (t[0] === "d" && String(t[1] || "").trim() !== "") ids.add(String(t[1]).split(":")[0].trim());
         }
         const at = new Date((ev.created_at || 0) * 1000).toISOString();
         for (const noteId of ids) {
-          if (!deletedByNote.has(noteId)) deletedByNote.set(noteId, []);
-          deletedByNote.get(noteId).push(author);
+          if (!isWireId(noteId)) continue;
+          const key = author + ":" + noteId;
+          deletedByNote.set(key, Math.max(deletedByNote.get(key) || 0, ev.created_at));
           deleted.push({ noteId, author, deletedAt: at, eventId: ev.id });
         }
         continue;
@@ -374,10 +407,14 @@ async function cmdFetch(a) {
         try {
           clear = decryptFrom(mySk, author, String(ev.content || ""));
         } catch { continue; } // wrong key / garbage — skip
+        if (!clear || typeof clear !== "object" || Array.isArray(clear)) continue;
         if (ev.kind === NOTE_KIND) {
+          if ((clear.title !== undefined && typeof clear.title !== "string")
+              || (clear.body !== undefined && typeof clear.body !== "string")) continue;
           const dFull = tag(ev, "d");
-          const noteId = dFull.split(":")[0];
-          if (!noteId) continue;
+          const parts = dFull.split(":");
+          const noteId = parts[0];
+          if (parts.length !== 2 || parts[1].toLowerCase() !== myHex || !isWireId(noteId)) continue;
           if (String(tag(ev, "p")).toLowerCase() !== myHex) continue;
           notes.push({
             id: noteId,
@@ -388,14 +425,17 @@ async function cmdFetch(a) {
             updatedAt: new Date((ev.created_at || 0) * 1000).toISOString(),
           });
         } else if (ev.kind === 1) {
-          const noteD = tag(ev, "i").split(":")[0];
-          if (!noteD || !clear.text) continue;
+          const noteD = tag(ev, "i");
+          const noteAuthor = commentNoteAuthor(ev, noteD, clear);
+          if (!isWireId(noteD) || !noteAuthor || typeof clear.text !== "string" || !clear.text) continue;
+          if (String(tag(ev, "p")).toLowerCase() !== myHex) continue;
           // Stable id: republishes of the same outbox comment share `ref`,
           // so they merge instead of piling up. Legacy events (published
           // before `ref` existed) fall back to the event id.
           const stableRef = typeof clear.ref === "string" ? clear.ref.trim().slice(0, 120) : "";
           pairs.push({
             noteId: noteD,
+            noteAuthor,
             comment: {
               id: stableRef !== "" ? stableRef : ev.id,
               author,
@@ -408,7 +448,7 @@ async function cmdFetch(a) {
         // Legacy public format (opt-in only).
         if (ev.kind === NOTE_KIND) {
           const d = tag(ev, "d");
-          if (!d || d.includes(":")) continue;
+          if (!isWireId(d)) continue;
           notes.push({
             id: d,
             eventId: ev.id,
@@ -419,9 +459,11 @@ async function cmdFetch(a) {
           });
         } else if (ev.kind === 1) {
           const noteD = tag(ev, "i");
-          if (!noteD || !ev.content) continue;
+          const noteAuthor = commentNoteAuthor(ev, noteD);
+          if (!isWireId(noteD) || !noteAuthor || !ev.content) continue;
           pairs.push({
             noteId: noteD,
+            noteAuthor,
             comment: {
               id: ev.id,
               author,
@@ -432,19 +474,23 @@ async function cmdFetch(a) {
         }
       }
     }
-    // Delete-wins, author-only: drop a note/pair only when the deleter is
-    // the note's author. Our own key has no authority over other authors.
-    const deletersOf = (noteId) => deletedByNote.get(noteId) || [];
+    // Match the signed owner and wire ID, never an arbitrary same-ID host.
+    // A strictly newer note from that same signer is an intentional reshare.
+    const newestByNote = new Map();
+    for (const n of notes) {
+      const key = n.authorHex + ":" + n.id;
+      newestByNote.set(key, Math.max(newestByNote.get(key) || 0, Date.parse(n.updatedAt) / 1000));
+    }
     const isDeletedNote = (noteId, authorHex) => {
-      const a = String(authorHex || "").toLowerCase();
-      return deletersOf(noteId).some((d) => d === a);
+      const key = authorHex + ":" + noteId;
+      return deletedByNote.has(key) && (newestByNote.get(key) || 0) <= deletedByNote.get(key);
     };
-    const keptNotes = notes.filter((n) => !isDeletedNote(n.id, n.authorHex));
-    const keptPairs = pairs.filter((p) => {
-      const host = keptNotes.find((n) => n.id === p.noteId) || notes.find((n) => n.id === p.noteId);
-      if (!host) return true;
-      return !isDeletedNote(p.noteId, host.authorHex);
+    const keptNotes = notes.filter(n => {
+      const key = n.authorHex + ":" + n.id;
+      const deletedAt = deletedByNote.get(key);
+      return deletedAt === undefined || Date.parse(n.updatedAt) / 1000 > deletedAt;
     });
+    const keptPairs = pairs.filter(p => !isDeletedNote(p.noteId, p.noteAuthor));
     notes.length = 0;
     notes.push(...keptNotes);
     pairs.length = 0;
