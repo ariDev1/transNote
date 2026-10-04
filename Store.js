@@ -540,12 +540,30 @@ function effectiveNostrAllow(allowList, friends) {
 // Returned notes are marked shared=true and carry the hex author so the
 // normal allow-list filter applies. Unknown authors are dropped unless
 // they are myHex itself (second device of the same user).
-// `deleted` tombstones from relays plus the local `knownDeleted` map both
-// suppress notes/pairs: delete-wins, so a deleted note never resurrects.
-function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
+// Received deletions retain their signed author and stay separate from
+// locally authored tombstones: they must never be re-signed by this device.
+function sanitizeNostrDeleted(raw) {
+  var out = []
+  var seen = {}
+  ;(Array.isArray(raw) ? raw : []).forEach(function (entry) {
+    if (!entry || typeof entry !== "object") return
+    var id = sanitizeId(entry.noteId)
+    var author = normalizePubkey(entry.author)
+    if (id === "" || author === "") return
+    var key = author + ":" + id
+    if (seen[key]) return
+    seen[key] = true
+    out.push({ noteId: id, author: author, deletedAt: normalizeText(entry.deletedAt) || nowIso() })
+  })
+  return out
+}
+
+function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted, knownNostrDeleted) {
   var notes = []
   var pairs = []
-  var deleted = []
+  // Previously accepted deletions survive startup before friends/identity
+  // load, allow-list changes, and malformed fetches. Gate new arrivals only.
+  var deleted = sanitizeNostrDeleted(knownNostrDeleted)
   try {
     var parsed = typeof raw === "string" ? JSON.parse(raw || "") : (raw || {})
     var me = normalizePubkey(myHex)
@@ -590,15 +608,17 @@ function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
       var delId = sanitizeId(del.noteId || del.id || del.d)
       if (delId === "") continue
       var delAuthor = normalizePubkey(del.author || del.authorHex)
-      if (delAuthor !== "" && !(delAuthor === me || isQualified(delAuthor, allowList))) continue
+      if (delAuthor === "" || !(delAuthor === me || isQualified(delAuthor, allowList))) continue
       deleted.push({ noteId: delId, author: delAuthor, deletedAt: normalizeText(del.deletedAt) || nowIso() })
     }
   } catch (e) { /* ignore bad fetch file */ }
-  // Delete-wins: relay tombstones + locally known tombstones suppress
-  // notes and pairs, so a deleted note can never resurrect on re-fetch.
+  deleted = sanitizeNostrDeleted(deleted)
+  // Local tombstones are never populated from remote data. Nostr deletions
+  // only suppress notes owned by the event signer, including hex-self.
   var tomb = sanitizeDeleted(knownDeleted)
+  var remoteTomb = {}
   deleted.forEach(function (entry) {
-    if (entry && entry.noteId !== "") tomb[entry.noteId] = entry.deletedAt || nowIso()
+    remoteTomb[entry.author + ":" + entry.noteId] = true
   })
   // De-duplicate notes by id (newest wins): relays return the same event
   // once per relay, and every sync cycle republishes shared notes.
@@ -608,7 +628,9 @@ function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
     if (!prev || (notes[k].updatedAt || "") >= (prev.updatedAt || "")) notesById[notes[k].id] = notes[k]
   }
   notes = Object.keys(notesById).map(function (key) { return notesById[key] })
-  notes = filterDeletedNotes(notes, tomb)
+  notes = filterDeletedNotes(notes, tomb).filter(function (n) {
+    return !remoteTomb[n.author + ":" + n.id]
+  })
   // Collapse relay duplicates: before stable `ref` ids existed, every
   // 60s republish of the same outbox comment created a new event id, so
   // the same (note, author, text) arrives N times with N different
@@ -617,8 +639,12 @@ function sanitizeNostrFetch(raw, allowList, myHex, knownDeleted) {
   // shadows once a stable copy exists, and collapse a hex-only group to
   // its earliest copy.
   pairs = dedupNostrPairs(pairs)
-  pairs = pairs.filter(function (p) { return p && !isDeleted(tomb, p.noteId) })
-  return { notes: notes, pairs: pairs, deleted: deleted, tombstones: tomb }
+  pairs = pairs.filter(function (p) {
+    if (!p || isDeleted(tomb, p.noteId)) return false
+    var host = notesById[p.noteId]
+    return !host || !remoteTomb[host.author + ":" + host.id]
+  })
+  return { notes: notes, pairs: pairs, deleted: deleted, tombstones: tomb, nostrTombstones: deleted }
 }
 
 // 64-hex ids are Nostr event ids (legacy relay duplicates); anything

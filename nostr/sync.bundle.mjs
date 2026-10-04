@@ -7804,12 +7804,12 @@ async function cmdFetch(a2) {
     const deletersOf = (noteId) => deletedByNote.get(noteId) || [];
     const isDeletedNote = (noteId, authorHex) => {
       const a3 = String(authorHex || "").toLowerCase();
-      return deletersOf(noteId).some((d) => d === a3 || d === myHex);
+      return deletersOf(noteId).some((d) => d === a3);
     };
     const keptNotes = notes.filter((n) => !isDeletedNote(n.id, n.authorHex));
     const keptPairs = pairs.filter((p) => {
       const host = keptNotes.find((n) => n.id === p.noteId) || notes.find((n) => n.id === p.noteId);
-      if (!host) return !deletersOf(p.noteId).some((d) => d === myHex);
+      if (!host) return true;
       return !isDeletedNote(p.noteId, host.authorHex);
     });
     notes.length = 0;

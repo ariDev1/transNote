@@ -188,17 +188,45 @@ class UnshareTombstoneTests(unittest.TestCase):
             body,
         )
 
-    def test_nostr_delete_path_stays_enabled(self):
-        body = self.function_block("loadNostrFetch", "refilterNostr")
-
-        self.assertIn(
-            "Store.sanitizeNostrFetch(root.nostrFetchRaw, nostrAllowList, root.myHex, deletedIds)",
-            body,
-        )
-        self.assertIn(
-            "deletedIds = Store.mergeDeleted(deletedIds, parsed.tombstones)",
-            body,
-        )
+    def test_nostr_deletions_persist_without_entering_publish_queue(self):
+        fetch = self.function_block("loadNostrFetch", "refilterNostr")
+        persist = self.function_block("persist", "loadLocal")
+        load = self.function_block("loadLocal", "migrateAuthors")
+        out = node_eval("""
+const Store = require('./Store.js');
+const Agent = {sanitizeProvenance: x => x || {}};
+const alice = 'a'.repeat(64), bob = 'b'.repeat(64);
+const root = {myHex: 'c'.repeat(64), nostrFetchRaw: ''};
+const nostrAllowList = [alice, bob], allowList = [alice, bob], myId = 'local';
+let deletedIds = {}, nostrDeleted = [], pendingDeletes = [], localNotes = [], peerNotes = [];
+let nostrPeerNotes = [], foreignComments = {}, outbox = [], hiddenIds = [], agentProvenance = {};
+let localLoadFailed = false, lastLocalRaw = '', localLoaded = false;
+const setupIdentityReady = false;
+const localFile = {setText: text => {localFile.text = text}};
+const notesBakFile = {setText: () => {}};
+const nostrPublishFile = {setText: text => {nostrPublishFile.text = text}};
+const writeSnapshot = () => {}, refreshDisplay = () => {}, secureFiles = () => {}, mergePeers = () => {};
+const allPeerNotes = () => peerNotes.concat(nostrPeerNotes);
+""" + fetch + persist + load + """
+const note = {id: 'victim', title: 'keep', authorHex: alice};
+loadNostrFetch(JSON.stringify({notes: [note], deleted: [{noteId: 'victim', author: bob}]}));
+const unauthorizedKept = nostrPeerNotes.length;
+loadNostrFetch(JSON.stringify({notes: [note], deleted: [{noteId: 'victim', author: alice}]}));
+const saved = localFile.text;
+const queued = JSON.parse(nostrPublishFile.text).deletes.length;
+nostrDeleted = []; deletedIds = {}; pendingDeletes = [];
+loadLocal(saved);
+loadNostrFetch(JSON.stringify({notes: [note]}));
+console.log(JSON.stringify({unauthorizedKept, keptAfterReload: nostrPeerNotes.length,
+  global: Object.keys(deletedIds).length, queued, pending: pendingDeletes.length,
+  savedAuthors: JSON.parse(saved).nostrDeleted.map(d => d.author).sort()}));
+""")
+        self.assertEqual(out['unauthorizedKept'], 1)
+        self.assertEqual(out['keptAfterReload'], 0)
+        self.assertEqual(out['global'], 0)
+        self.assertEqual(out['queued'], 0)
+        self.assertEqual(out['pending'], 0)
+        self.assertEqual(out['savedAuthors'], ['a' * 64, 'b' * 64])
 
 
 class CleanupAndGuardTests(unittest.TestCase):

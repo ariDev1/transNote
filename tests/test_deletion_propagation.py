@@ -19,6 +19,41 @@ def node_eval(script):
 
 
 class DeletionPropagationTests(unittest.TestCase):
+    def test_received_deletions_are_author_scoped_and_never_republished(self):
+        out = node_eval("""
+const S = require('./Store.js');
+const alice = 'a'.repeat(64), bob = 'b'.repeat(64), me = 'c'.repeat(64);
+const note = {id: 'victim', title: 'keep', authorHex: alice};
+const pair = {noteId: 'victim', comment: {id: 'comment-1', author: bob, text: 'keep'}};
+const results = [bob, me, '', 'invalid'].map(author => {
+  const f = S.sanitizeNostrFetch({notes: [note], pairs: [pair], deleted: [{noteId: 'victim', author}]}, [alice, bob], me, {});
+  return {notes: f.notes.length, pairs: f.pairs.length,
+          deletes: S.buildNostrPublish([], [], f.tombstones).deletes.length};
+});
+const first = S.sanitizeNostrFetch({deleted: [{noteId: 'victim', author: alice}]}, [alice, bob], me, {});
+const saved = JSON.parse(JSON.stringify(first.nostrTombstones || []));
+const second = S.sanitizeNostrFetch({notes: [note], pairs: [pair]}, [alice, bob], me, {}, saved);
+const other = S.sanitizeNostrFetch({notes: [{...note, authorHex: bob}]}, [alice, bob], me, {}, saved);
+console.log(JSON.stringify({results, kept: second.notes.length, pairs: second.pairs.length,
+  other: other.notes.length, deletes: S.buildNostrPublish([], [], first.tombstones).deletes.length}));
+""")
+        self.assertEqual(out['results'], [{'notes': 1, 'pairs': 1, 'deletes': 0}] * 4)
+        self.assertEqual(out['kept'], 0)
+        self.assertEqual(out['pairs'], 0)
+        self.assertEqual(out['other'], 1)
+        self.assertEqual(out['deletes'], 0)
+
+    def test_saved_author_scoped_deletions_survive_startup_and_bad_fetch(self):
+        out = node_eval("""
+const S = require('./Store.js');
+const author = 'a'.repeat(64);
+const saved = [{noteId: 'victim', author, deletedAt: '2026-10-04T00:00:00.000Z'}];
+const startup = S.sanitizeNostrFetch({}, [], '', {}, saved);
+const corrupt = S.sanitizeNostrFetch('{bad json', [author], '', {}, saved);
+console.log(JSON.stringify({startup: startup.nostrTombstones.length, corrupt: corrupt.nostrTombstones.length}));
+""")
+        self.assertEqual(out, {'startup': 1, 'corrupt': 1})
+
     def test_tombstone_suppresses_nostr_resurrection(self):
         out = node_eval(
             """

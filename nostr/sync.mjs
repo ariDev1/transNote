@@ -433,17 +433,16 @@ async function cmdFetch(a) {
       }
     }
     // Delete-wins, author-only: drop a note/pair only when the deleter is
-    // the note's author or ourselves (second device). A third party cannot
-    // delete someone else's notes.
+    // the note's author. Our own key has no authority over other authors.
     const deletersOf = (noteId) => deletedByNote.get(noteId) || [];
     const isDeletedNote = (noteId, authorHex) => {
       const a = String(authorHex || "").toLowerCase();
-      return deletersOf(noteId).some((d) => d === a || d === myHex);
+      return deletersOf(noteId).some((d) => d === a);
     };
     const keptNotes = notes.filter((n) => !isDeletedNote(n.id, n.authorHex));
     const keptPairs = pairs.filter((p) => {
       const host = keptNotes.find((n) => n.id === p.noteId) || notes.find((n) => n.id === p.noteId);
-      if (!host) return !deletersOf(p.noteId).some((d) => d === myHex);
+      if (!host) return true;
       return !isDeletedNote(p.noteId, host.authorHex);
     });
     notes.length = 0;

@@ -1164,6 +1164,9 @@ Panel {
   // published in the LAN snapshot + as NIP-09 kind-5 on Nostr. Delete-wins:
   // every merge path filters against them so deleted notes never resurrect.
   property var deletedIds: ({})
+  // Received Nostr deletions retain the signer; never put them in deletedIds
+  // or pendingDeletes, which are published under our own identity.
+  property var nostrDeleted: []
   // Tombstones not yet uploaded to Nostr (noteIds). Flushed on publish.
   property var pendingDeletes: []
   // Local-only hides [noteId]: dismissing a peer's note hides it on this
@@ -1523,7 +1526,7 @@ Panel {
     // A failed load keeps memory intact (see onLoadFailed): never write the
     // local file in that state, or a transient read error would wipe it.
     // Snapshot + publish queue still go out so peers keep current state.
-    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, hidden: Store.sanitizeHidden(hiddenIds), agentProvenance: Agent.sanitizeProvenance(agentProvenance) }, null, 2) + "\n"
+    var payload = JSON.stringify({ version: 2, deviceId: myId, notes: localNotes, outbox: outbox, deletedIds: deletedIds, nostrDeleted: nostrDeleted, hidden: Store.sanitizeHidden(hiddenIds), agentProvenance: Agent.sanitizeProvenance(agentProvenance) }, null, 2) + "\n"
     if (!localLoadFailed) {
       // Rotate the previous state aside first (skipped on the very first save
       // when nothing was loaded yet) — never overwrites the backup with empty.
@@ -1546,6 +1549,7 @@ Panel {
     var notes = []
     var box = []
     var tomb = ({})
+    var remoteTomb = []
     var hid = []
     var provenance = Agent.sanitizeProvenance(null)
     try {
@@ -1557,6 +1561,7 @@ Panel {
       })
       box = Store.sanitizeOutbox(parsed && parsed.outbox)
       tomb = Store.sanitizeDeleted(parsed && (parsed.deletedIds || parsed.deleted))
+      remoteTomb = Store.sanitizeNostrFetch({}, nostrAllowList, root.myHex, {}, parsed && parsed.nostrDeleted).nostrTombstones
       hid = Store.sanitizeHidden(parsed && parsed.hidden)
       provenance = Agent.sanitizeProvenance(parsed && parsed.agentProvenance)
       // Device rename migration: every note in this file was authored on
@@ -1582,6 +1587,7 @@ Panel {
     localNotes = notes
     outbox = box.filter(function (entry) { return entry && !Store.isDeleted(tomb, entry.noteId) })
     deletedIds = tomb
+    nostrDeleted = remoteTomb
     hiddenIds = hid
     agentProvenance = provenance
     // Pending Nostr deletes = all tombstones (reconciled after publish).
@@ -1677,14 +1683,12 @@ Panel {
   // Internet fetch output (written by the built-in sync, read back here).
   // Already decrypted + author-filtered by sync.mjs; re-filter here too so
   // removing someone hides them immediately. Relay tombstones (kind-5)
-  // merge into local deletedIds — delete-wins, no resurrection.
+  // stay author-scoped and are never republished as our own deletions.
   function loadNostrFetch(raw) {
     root.nostrFetchRaw = String(raw || "")
-    var parsed = Store.sanitizeNostrFetch(root.nostrFetchRaw, nostrAllowList, root.myHex, deletedIds)
-    if (parsed.tombstones && JSON.stringify(parsed.tombstones) !== JSON.stringify(deletedIds)) {
-      deletedIds = Store.mergeDeleted(deletedIds, parsed.tombstones)
-      pendingDeletes = Object.keys(deletedIds)
-    }
+    var parsed = Store.sanitizeNostrFetch(root.nostrFetchRaw, nostrAllowList, root.myHex, deletedIds, nostrDeleted)
+    var deletionsChanged = JSON.stringify(parsed.nostrTombstones) !== JSON.stringify(nostrDeleted)
+    nostrDeleted = parsed.nostrTombstones
     var mine = {}
     localNotes.forEach(function (n) { if (n) mine[n.id] = true })
     var folderIds = {}
@@ -1695,7 +1699,7 @@ Panel {
     var allowWithSelf = (allowList || []).concat(root.myHex ? [root.myHex] : [])
     foreignComments = Store.mergeForeignComments(foreignComments, parsed.pairs, allowWithSelf, myId)
     var pruned = Store.pruneOutbox(outbox, localNotes, allPeerNotes())
-    if (JSON.stringify(pruned) !== JSON.stringify(outbox)) {
+    if (deletionsChanged || JSON.stringify(pruned) !== JSON.stringify(outbox)) {
       outbox = pruned
       persist()
       return
